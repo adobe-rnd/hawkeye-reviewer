@@ -26,7 +26,8 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
-       contains(github.event.comment.body, '/claude-review'))
+       contains(github.event.comment.body, '/claude-review') &&
+       github.event.comment.author_association != 'NONE')
     steps:
       - name: Claude Bedrock PR Review
         uses: adobe-rnd/claude-pr-reviewer@v1.0.0

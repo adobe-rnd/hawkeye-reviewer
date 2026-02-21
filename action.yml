@@ -37,7 +37,7 @@ runs:
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
           "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
-          -d '{"state":"pending","context":"Claude Bedrock PR Review","description":"New commits pushed — type /claude-review to re-review."}'
+          -d '{"state":"pending","context":"Claude Bedrock PR Review","description":"Type /claude-review to review latest changes"}'
         echo "Review status invalidated." >&2
 
     # Review path: post placeholder immediately via curl, then run the full review

@@ -15,6 +15,8 @@ GITHUB_API = "https://api.github.com"
 
 CLAUDE_AVATAR = "https://github.com/anthropics.png?size=36"
 
+STATUS_CONTEXT = "Claude PR Review"
+
 SEVERITY_ICONS = {
     "critical": ":rotating_light:",
     "warning": ":warning:",
@@ -36,6 +38,30 @@ def github_request(method: str, url: str, token: str, **kwargs) -> requests.Resp
     headers["Accept"] = "application/vnd.github+json"
     headers["X-GitHub-Api-Version"] = "2022-11-28"
     return requests.request(method, url, headers=headers, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Commit Status API
+# ---------------------------------------------------------------------------
+
+
+def set_commit_status(
+    owner: str, repo: str, sha: str, state: str, description: str, token: str
+) -> None:
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/statuses/{sha}"
+    payload = {
+        "state": state,
+        "context": STATUS_CONTEXT,
+        "description": description,
+    }
+    resp = github_request("POST", url, token, json=payload)
+    resp.raise_for_status()
+    print(f"Commit status set to '{state}' on {sha[:8]}.", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# GitHub data fetching
+# ---------------------------------------------------------------------------
 
 
 def get_pr_info(owner: str, repo: str, pr_number: int, token: str) -> dict:
@@ -313,7 +339,6 @@ def post_review(
     valid_lines: dict[str, set[int]],
     token: str,
 ) -> None:
-    # 1. Post the summary as an issue comment (visible at the top, like Copilot)
     issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
     resp = github_request("POST", issue_url, token, json={"body": summary_body})
     resp.raise_for_status()
@@ -322,7 +347,6 @@ def post_review(
     if not inline_comments:
         return
 
-    # 2. Filter to comments whose line sits inside the diff
     review_comments: list[dict] = []
     for c in inline_comments:
         path = c.get("path", "")
@@ -339,13 +363,11 @@ def post_review(
     if not review_comments:
         return
 
-    # 3. Post as a PR review (batch)
     review_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
     payload = {"commit_id": commit_sha, "event": "COMMENT", "comments": review_comments}
     resp = github_request("POST", review_url, token, json=payload)
 
     if resp.status_code == 422:
-        # Fallback: post each comment individually (some positions may be invalid)
         print("Batch review returned 422 — retrying individually...", file=sys.stderr)
         posted, skipped = 0, 0
         for rc in review_comments:
@@ -368,34 +390,55 @@ def post_review(
 
 
 def main() -> None:
-    if len(sys.argv) != 4:
-        print("Usage: claude_pr_review.py <owner> <repo> <pr_number>", file=sys.stderr)
+    if len(sys.argv) < 4:
+        print(
+            "Usage: claude_pr_review.py <owner> <repo> <pr_number> [--invalidate]",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     owner, repo, pr_str = sys.argv[1:4]
     pr_number = int(pr_str)
+    invalidate = "--invalidate" in sys.argv
 
     github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        print("Missing required environment variable: GITHUB_TOKEN", file=sys.stderr)
+        sys.exit(1)
+
+    pr_info = get_pr_info(owner, repo, pr_number, github_token)
+    head_sha = pr_info["head"]["sha"]
+
+    # Invalidate mode: mark the check as pending and exit (no Claude API call)
+    if invalidate:
+        print(f"Invalidating review status for PR #{pr_number}...", file=sys.stderr)
+        set_commit_status(
+            owner, repo, head_sha, "pending",
+            "New commits pushed — review outdated. Type /claude-review to re-review.",
+            github_token,
+        )
+        return
+
+    # Full review mode: requires Claude API credentials
     api_url = os.environ.get("CLAUDE_API_URL")
     api_token = os.environ.get("CLAUDE_API_TOKEN")
 
-    missing = [
-        name
-        for name, val in [
-            ("GITHUB_TOKEN", github_token),
-            ("CLAUDE_API_URL", api_url),
-            ("CLAUDE_API_TOKEN", api_token),
-        ]
-        if not val
-    ]
+    missing = []
+    if not api_url:
+        missing.append("CLAUDE_API_URL")
+    if not api_token:
+        missing.append("CLAUDE_API_TOKEN")
     if missing:
         print(f"Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
     print(f"Reviewing PR #{pr_number} on {owner}/{repo}...", file=sys.stderr)
 
-    pr_info = get_pr_info(owner, repo, pr_number, github_token)
-    head_sha = pr_info["head"]["sha"]
+    set_commit_status(
+        owner, repo, head_sha, "pending",
+        "Claude is reviewing this PR...",
+        github_token,
+    )
 
     files = get_changed_files(owner, repo, pr_number, github_token)
     print(f"  {len(files)} changed file(s).", file=sys.stderr)
@@ -422,6 +465,7 @@ def main() -> None:
         )
         issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
         github_request("POST", issue_url, github_token, json={"body": fallback_body}).raise_for_status()
+        set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
         return
 
     summary = response.get("summary", {})
@@ -435,9 +479,10 @@ def main() -> None:
 
     post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token)
 
+    set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
+
     print("Done.", file=sys.stderr)
 
 
 if __name__ == "__main__":
     main()
-

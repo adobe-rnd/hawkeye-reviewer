@@ -5,18 +5,15 @@ branding:
   color: 'orange'
 
 inputs:
-  app-id:
-    description: 'GitHub App ID for the Claude Reviewer bot'
-    required: true
   app-private-key:
     description: 'GitHub App private key (.pem contents)'
     required: true
   claude-api-url:
-    description: 'Bedrock converse endpoint URL'
-    required: true
+    description: 'Bedrock converse endpoint URL (not required for invalidate-only runs)'
+    required: false
   claude-api-token:
-    description: 'Bedrock API bearer token'
-    required: true
+    description: 'Bedrock API bearer token (not required for invalidate-only runs)'
+    required: false
 
 runs:
   using: 'composite'
@@ -43,9 +40,20 @@ runs:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         CLAUDE_API_URL: ${{ inputs.claude-api-url }}
         CLAUDE_API_TOKEN: ${{ inputs.claude-api-token }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
       run: |
-        python ${{ github.action_path }}/scripts/claude_pr_review.py \
-          ${{ github.repository_owner }} \
-          ${{ github.event.repository.name }} \
-          ${{ github.event.pull_request.number }}
+        PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
 
+        if [[ "$EVENT_NAME" == "pull_request" && "$EVENT_ACTION" == "synchronize" ]]; then
+          python ${{ github.action_path }}/scripts/claude_pr_review.py \
+            ${{ github.repository_owner }} \
+            ${{ github.event.repository.name }} \
+            ${PR_NUMBER} \
+            --invalidate
+        else
+          python ${{ github.action_path }}/scripts/claude_pr_review.py \
+            ${{ github.repository_owner }} \
+            ${{ github.event.repository.name }} \
+            ${PR_NUMBER}
+        fi

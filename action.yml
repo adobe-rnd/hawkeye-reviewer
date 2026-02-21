@@ -1,0 +1,51 @@
+name: 'Claude PR Reviewer'
+description: 'AI code review powered by Claude (Anthropic) via Amazon Bedrock'
+branding:
+  icon: 'eye'
+  color: 'orange'
+
+inputs:
+  app-id:
+    description: 'GitHub App ID for the Claude Reviewer bot'
+    required: true
+  app-private-key:
+    description: 'GitHub App private key (.pem contents)'
+    required: true
+  claude-api-url:
+    description: 'Bedrock converse endpoint URL'
+    required: true
+  claude-api-token:
+    description: 'Bedrock API bearer token'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Generate app token
+      id: app-token
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install requests
+
+    - name: Run Claude PR review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        CLAUDE_API_URL: ${{ inputs.claude-api-url }}
+        CLAUDE_API_TOKEN: ${{ inputs.claude-api-token }}
+      run: |
+        python ${{ github.action_path }}/scripts/claude_pr_review.py \
+          ${{ github.repository_owner }} \
+          ${{ github.event.repository.name }} \
+          ${{ github.event.pull_request.number }}
+

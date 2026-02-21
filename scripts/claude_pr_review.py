@@ -243,7 +243,7 @@ def format_summary_comment(summary: dict, comments: list[dict]) -> str:
 
     overview = summary.get("overview", "")
     if overview:
-        parts.append(f"{logo} ## Pull request overview\n\n{overview}")
+        parts.append(f"<h2>{logo} Pull request overview</h2>\n\n{overview}")
 
     changes = summary.get("changes", [])
     if changes:
@@ -415,7 +415,7 @@ def main() -> None:
         logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
         footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
         fallback_body = (
-            f"{logo} ## AI PR Review\n\n"
+            f"<h2>{logo} AI PR Review</h2>\n\n"
             "Claude returned a response that could not be parsed as structured JSON.\n\n"
             f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
             f"<sub>{footer_logo} Reviewed by **Claude 4.5 Sonnet** (Anthropic) via Amazon Bedrock</sub>"

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Claude PR Reviewer via Bedrock — posts Copilot-style reviews on pull requests."""
+"""Claude PR Reviewer via Bedrock — posts Copilot-style reviews on pull requests.
+
+Uses only the Python standard library (no pip install needed).
+"""
 
 import base64
 import json
@@ -7,9 +10,9 @@ import os
 import re
 import sys
 import textwrap
+import urllib.error
+import urllib.request
 from typing import Any
-
-import requests
 
 GITHUB_API = "https://api.github.com"
 
@@ -32,12 +35,95 @@ SEVERITY_LABELS = {
 }
 
 
-def github_request(method: str, url: str, token: str, **kwargs) -> requests.Response:
-    headers = kwargs.pop("headers", {})
-    headers["Authorization"] = f"Bearer {token}"
-    headers["Accept"] = "application/vnd.github+json"
-    headers["X-GitHub-Api-Version"] = "2022-11-28"
-    return requests.request(method, url, headers=headers, **kwargs)
+# ---------------------------------------------------------------------------
+# Model name detection
+# ---------------------------------------------------------------------------
+
+
+def get_model_name(api_url: str) -> str:
+    """Extract a friendly model name from the Bedrock endpoint URL."""
+    match = re.search(r"/model/([^/]+)/", api_url)
+    if not match:
+        return "Claude"
+
+    model_id = match.group(1).lower()
+
+    friendly_names = {
+        "claude-sonnet-4-5": "Claude Sonnet 4.5",
+        "claude-opus-4": "Claude Opus 4",
+        "claude-3-7-sonnet": "Claude 3.7 Sonnet",
+        "claude-3-5-sonnet": "Claude 3.5 Sonnet",
+        "claude-3-5-haiku": "Claude 3.5 Haiku",
+        "claude-3-opus": "Claude 3 Opus",
+        "claude-3-sonnet": "Claude 3 Sonnet",
+        "claude-3-haiku": "Claude 3 Haiku",
+    }
+    for key, name in friendly_names.items():
+        if key in model_id:
+            return name
+
+    cleaned = model_id.replace("anthropic.", "")
+    cleaned = re.sub(r"-\d{8}-v\d+.*$", "", cleaned)
+    return cleaned.replace("-", " ").title() or "Claude"
+
+
+# ---------------------------------------------------------------------------
+# HTTP helpers (stdlib only — no requests dependency)
+# ---------------------------------------------------------------------------
+
+
+def _request(method: str, url: str, headers: dict, data: bytes | None = None, timeout: int = 60) -> dict:
+    """Make an HTTP request and return {"status": int, "body": Any}."""
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            return {"status": resp.status, "body": json.loads(body) if body else {}}
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        return {"status": exc.code, "body": body}
+
+
+def github_get(url: str, token: str, params: dict | None = None) -> dict:
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{url}?{qs}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    result = _request("GET", url, headers)
+    if result["status"] >= 400:
+        raise RuntimeError(f"GET {url} → {result['status']}: {result['body']}")
+    return result["body"]
+
+
+def github_post(url: str, token: str, payload: dict) -> dict:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+    }
+    data = json.dumps(payload).encode("utf-8")
+    return _request("POST", url, headers, data=data)
+
+
+def github_patch(url: str, token: str, payload: dict) -> dict:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+    }
+    data = json.dumps(payload).encode("utf-8")
+    return _request("PATCH", url, headers, data=data)
+
+
+def http_post(url: str, headers: dict, payload: dict, timeout: int = 180) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    return _request("POST", url, headers, data=data, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -45,18 +131,43 @@ def github_request(method: str, url: str, token: str, **kwargs) -> requests.Resp
 # ---------------------------------------------------------------------------
 
 
-def set_commit_status(
-    owner: str, repo: str, sha: str, state: str, description: str, token: str
-) -> None:
+def set_commit_status(owner: str, repo: str, sha: str, state: str, description: str, token: str) -> None:
     url = f"{GITHUB_API}/repos/{owner}/{repo}/statuses/{sha}"
-    payload = {
-        "state": state,
-        "context": STATUS_CONTEXT,
-        "description": description,
-    }
-    resp = github_request("POST", url, token, json=payload)
-    resp.raise_for_status()
+    result = github_post(url, token, {"state": state, "context": STATUS_CONTEXT, "description": description})
+    if result["status"] >= 400:
+        raise RuntimeError(f"Failed to set commit status: {result['body']}")
     print(f"Commit status set to '{state}' on {sha[:8]}.", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Placeholder comment (post → edit in-place)
+# ---------------------------------------------------------------------------
+
+PLACEHOLDER_BODY = (
+    f'<h2><img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle"> '
+    "Reviewing your PR...</h2>\n\n"
+    ":hourglass_flowing_sand: Claude is analyzing your changes. "
+    "A detailed review with inline comments will appear here shortly."
+)
+
+
+def post_placeholder_comment(owner: str, repo: str, pr_number: int, token: str) -> int:
+    """Post a placeholder comment and return the comment ID."""
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+    result = github_post(url, token, {"body": PLACEHOLDER_BODY})
+    if result["status"] >= 400:
+        raise RuntimeError(f"Failed to post placeholder: {result['body']}")
+    print("Placeholder comment posted.", file=sys.stderr)
+    return result["body"]["id"]
+
+
+def edit_comment(owner: str, repo: str, comment_id: int, body: str, token: str) -> None:
+    """Edit an existing issue comment in-place."""
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/comments/{comment_id}"
+    result = github_patch(url, token, {"body": body})
+    if result["status"] >= 400:
+        raise RuntimeError(f"Failed to edit comment: {result['body']}")
+    print("Placeholder comment updated with review.", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +176,7 @@ def set_commit_status(
 
 
 def get_pr_info(owner: str, repo: str, pr_number: int, token: str) -> dict:
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}"
-    resp = github_request("GET", url, token)
-    resp.raise_for_status()
-    return resp.json()
+    return github_get(f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}", token)
 
 
 def get_changed_files(owner: str, repo: str, pr_number: int, token: str) -> list[dict]:
@@ -76,9 +184,7 @@ def get_changed_files(owner: str, repo: str, pr_number: int, token: str) -> list
     files: list[dict] = []
     page = 1
     while True:
-        resp = github_request("GET", url, token, params={"page": page, "per_page": 100})
-        resp.raise_for_status()
-        batch = resp.json()
+        batch = github_get(url, token, params={"page": str(page), "per_page": "100"})
         if not batch:
             break
         files.extend(batch)
@@ -88,14 +194,13 @@ def get_changed_files(owner: str, repo: str, pr_number: int, token: str) -> list
 
 def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> str:
     url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
-    resp = github_request("GET", url, token, params={"ref": ref})
-    if resp.status_code == 404:
+    try:
+        data = github_get(url, token, params={"ref": ref})
+    except RuntimeError:
         return ""
-    resp.raise_for_status()
-    data = resp.json()
     if isinstance(data, dict) and data.get("encoding") == "base64":
         return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
-    return resp.text
+    return ""
 
 
 def get_diff_lines(patch: str) -> set[int]:
@@ -228,9 +333,10 @@ def call_claude(prompt: str, api_url: str, api_token: str) -> str:
     payload = {
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
     }
-    resp = requests.post(api_url, headers=headers, json=payload, timeout=180)
-    resp.raise_for_status()
-    data = resp.json()
+    result = http_post(api_url, headers, payload, timeout=180)
+    if result["status"] >= 400:
+        raise RuntimeError(f"Claude API error {result['status']}: {result['body']}")
+    data = result["body"]
 
     try:
         contents = (data.get("output") or {}).get("message", {}).get("content", [])
@@ -262,7 +368,7 @@ def parse_response(text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def format_summary_comment(summary: dict, comments: list[dict]) -> str:
+def format_summary_comment(summary: dict, comments: list[dict], model_name: str = "Claude") -> str:
     parts: list[str] = []
 
     logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
@@ -303,7 +409,8 @@ def format_summary_comment(summary: dict, comments: list[dict]) -> str:
 
     footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
     parts.append(
-        f"<sub>{footer_logo} Reviewed by **Claude 4.5 Sonnet** (Anthropic) via Amazon Bedrock</sub>"
+        f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock "
+        "| Type `/claude-review` in a comment to re-review after new commits</sub>"
     )
 
     return "\n\n".join(parts)
@@ -338,11 +445,16 @@ def post_review(
     inline_comments: list[dict],
     valid_lines: dict[str, set[int]],
     token: str,
+    placeholder_comment_id: int | None = None,
 ) -> None:
-    issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-    resp = github_request("POST", issue_url, token, json={"body": summary_body})
-    resp.raise_for_status()
-    print("Summary comment posted.", file=sys.stderr)
+    if placeholder_comment_id:
+        edit_comment(owner, repo, placeholder_comment_id, summary_body, token)
+    else:
+        issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        result = github_post(issue_url, token, {"body": summary_body})
+        if result["status"] >= 400:
+            raise RuntimeError(f"Failed to post summary: {result['body']}")
+        print("Summary comment posted.", file=sys.stderr)
 
     if not inline_comments:
         return
@@ -365,22 +477,23 @@ def post_review(
 
     review_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
     payload = {"commit_id": commit_sha, "event": "COMMENT", "comments": review_comments}
-    resp = github_request("POST", review_url, token, json=payload)
+    result = github_post(review_url, token, payload)
 
-    if resp.status_code == 422:
+    if result["status"] == 422:
         print("Batch review returned 422 — retrying individually...", file=sys.stderr)
         posted, skipped = 0, 0
         for rc in review_comments:
             single = {"commit_id": commit_sha, "event": "COMMENT", "comments": [rc]}
-            r = github_request("POST", review_url, token, json=single)
-            if r.ok:
+            r = github_post(review_url, token, single)
+            if r["status"] < 400:
                 posted += 1
             else:
                 skipped += 1
-                print(f"  Skipped {rc['path']}:{rc['line']} ({r.status_code})", file=sys.stderr)
+                print(f"  Skipped {rc['path']}:{rc['line']} ({r['status']})", file=sys.stderr)
         print(f"Individual posting: {posted} posted, {skipped} skipped.", file=sys.stderr)
+    elif result["status"] >= 400:
+        raise RuntimeError(f"Failed to post review: {result['body']}")
     else:
-        resp.raise_for_status()
         print(f"{len(review_comments)} inline comments posted.", file=sys.stderr)
 
 
@@ -409,17 +522,15 @@ def main() -> None:
     pr_info = get_pr_info(owner, repo, pr_number, github_token)
     head_sha = pr_info["head"]["sha"]
 
-    # Invalidate mode: mark the check as pending and exit (no Claude API call)
     if invalidate:
         print(f"Invalidating review status for PR #{pr_number}...", file=sys.stderr)
         set_commit_status(
             owner, repo, head_sha, "pending",
-            "New commits pushed — review outdated. Type /claude-review to re-review.",
+            "New commits pushed — type /claude-review to re-review.",
             github_token,
         )
         return
 
-    # Full review mode: requires Claude API credentials
     api_url = os.environ.get("CLAUDE_API_URL")
     api_token = os.environ.get("CLAUDE_API_TOKEN")
 
@@ -432,13 +543,11 @@ def main() -> None:
         print(f"Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Reviewing PR #{pr_number} on {owner}/{repo}...", file=sys.stderr)
+    model_name = get_model_name(api_url)
+    print(f"Reviewing PR #{pr_number} on {owner}/{repo} with {model_name}...", file=sys.stderr)
 
-    set_commit_status(
-        owner, repo, head_sha, "pending",
-        "Claude is reviewing this PR...",
-        github_token,
-    )
+    set_commit_status(owner, repo, head_sha, "pending", f"{model_name} is reviewing this PR...", github_token)
+    placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
 
     files = get_changed_files(owner, repo, pr_number, github_token)
     print(f"  {len(files)} changed file(s).", file=sys.stderr)
@@ -461,10 +570,9 @@ def main() -> None:
             f"<h2>{logo} AI PR Review</h2>\n\n"
             "Claude returned a response that could not be parsed as structured JSON.\n\n"
             f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
-            f"<sub>{footer_logo} Reviewed by **Claude 4.5 Sonnet** (Anthropic) via Amazon Bedrock</sub>"
+            f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
         )
-        issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-        github_request("POST", issue_url, github_token, json={"body": fallback_body}).raise_for_status()
+        edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
         set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
         return
 
@@ -475,10 +583,8 @@ def main() -> None:
         if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
     ]
 
-    summary_body = format_summary_comment(summary, comments)
-
-    post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token)
-
+    summary_body = format_summary_comment(summary, comments, model_name)
+    post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token, placeholder_id)
     set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
 
     print("Done.", file=sys.stderr)

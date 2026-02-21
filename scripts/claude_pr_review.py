@@ -11,6 +11,7 @@ import re
 import sys
 import textwrap
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -18,7 +19,7 @@ GITHUB_API = "https://api.github.com"
 
 CLAUDE_AVATAR = "https://github.com/anthropics.png?size=36"
 
-STATUS_CONTEXT = "Claude PR Review"
+STATUS_CONTEXT = "Claude Bedrock PR Review"
 
 SEVERITY_ICONS = {
     "critical": ":rotating_light:",
@@ -48,22 +49,39 @@ def get_model_name(api_url: str) -> str:
 
     model_id = match.group(1).lower()
 
-    friendly_names = {
-        "claude-sonnet-4-5": "Claude Sonnet 4.5",
-        "claude-opus-4": "Claude Opus 4",
-        "claude-3-7-sonnet": "Claude 3.7 Sonnet",
-        "claude-3-5-sonnet": "Claude 3.5 Sonnet",
-        "claude-3-5-haiku": "Claude 3.5 Haiku",
-        "claude-3-opus": "Claude 3 Opus",
-        "claude-3-sonnet": "Claude 3 Sonnet",
-        "claude-3-haiku": "Claude 3 Haiku",
-    }
-    for key, name in friendly_names.items():
-        if key in model_id:
+    # Strip common prefixes so matching is clean
+    stripped = re.sub(r"^(us\.|eu\.|ap\.)?anthropic\.", "", model_id)
+
+    # Ordered most-specific first: longer version numbers before shorter ones
+    # so "opus-4-6" matches before "opus-4"
+    families = ["opus", "sonnet", "haiku"]
+    versions = ["4-6", "4-5", "4"]
+    friendly_names: list[tuple[str, str]] = []
+
+    for ver in versions:
+        display_ver = ver.replace("-", ".")
+        for family in families:
+            friendly_names.append(
+                (f"claude-{family}-{ver}", f"Claude {family.title()} {display_ver}")
+            )
+
+    # Claude 3.x naming uses a different pattern: claude-3-{minor}-{family}
+    legacy = [
+        ("claude-3-7-sonnet", "Claude 3.7 Sonnet"),
+        ("claude-3-5-sonnet", "Claude 3.5 Sonnet"),
+        ("claude-3-5-haiku", "Claude 3.5 Haiku"),
+        ("claude-3-opus", "Claude 3 Opus"),
+        ("claude-3-sonnet", "Claude 3 Sonnet"),
+        ("claude-3-haiku", "Claude 3 Haiku"),
+    ]
+    friendly_names.extend(legacy)
+
+    for key, name in friendly_names:
+        if key in stripped:
             return name
 
-    cleaned = model_id.replace("anthropic.", "")
-    cleaned = re.sub(r"-\d{8}-v\d+.*$", "", cleaned)
+    # Fallback: clean up the raw model ID into a readable name
+    cleaned = re.sub(r"-\d{8}-v\d+.*$", "", stripped)
     return cleaned.replace("-", " ").title() or "Claude"
 
 
@@ -78,16 +96,23 @@ def _request(method: str, url: str, headers: dict, data: bytes | None = None, ti
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            return {"status": resp.status, "body": json.loads(body) if body else {}}
+            try:
+                parsed = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                parsed = body
+            return {"status": resp.status, "body": parsed}
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-        return {"status": exc.code, "body": body}
+        try:
+            parsed = json.loads(body) if body else body
+        except json.JSONDecodeError:
+            parsed = body
+        return {"status": exc.code, "body": parsed}
 
 
 def github_get(url: str, token: str, params: dict | None = None) -> dict:
     if params:
-        qs = "&".join(f"{k}={v}" for k, v in params.items())
-        url = f"{url}?{qs}"
+        url = f"{url}?{urllib.parse.urlencode(params)}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -505,14 +530,13 @@ def post_review(
 def main() -> None:
     if len(sys.argv) < 4:
         print(
-            "Usage: claude_pr_review.py <owner> <repo> <pr_number> [--invalidate]",
+            "Usage: claude_pr_review.py <owner> <repo> <pr_number>",
             file=sys.stderr,
         )
         sys.exit(1)
 
     owner, repo, pr_str = sys.argv[1:4]
     pr_number = int(pr_str)
-    invalidate = "--invalidate" in sys.argv
 
     github_token = os.environ.get("GITHUB_TOKEN")
     if not github_token:
@@ -521,15 +545,6 @@ def main() -> None:
 
     pr_info = get_pr_info(owner, repo, pr_number, github_token)
     head_sha = pr_info["head"]["sha"]
-
-    if invalidate:
-        print(f"Invalidating review status for PR #{pr_number}...", file=sys.stderr)
-        set_commit_status(
-            owner, repo, head_sha, "pending",
-            "New commits pushed — type /claude-review to re-review.",
-            github_token,
-        )
-        return
 
     api_url = os.environ.get("CLAUDE_API_URL")
     api_token = os.environ.get("CLAUDE_API_TOKEN")
@@ -553,45 +568,62 @@ def main() -> None:
     if not placeholder_id:
         placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
 
-    files = get_changed_files(owner, repo, pr_number, github_token)
-    print(f"  {len(files)} changed file(s).", file=sys.stderr)
+    logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
+    footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
 
-    valid_lines: dict[str, set[int]] = {}
-    for f in files:
-        valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
+    try:
+        files = get_changed_files(owner, repo, pr_number, github_token)
+        print(f"  {len(files)} changed file(s).", file=sys.stderr)
 
-    prompt = build_prompt(pr_info, files, owner, repo, head_sha, github_token)
+        valid_lines: dict[str, set[int]] = {}
+        for f in files:
+            valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
 
-    print("  Calling Claude...", file=sys.stderr)
-    claude_text = call_claude(prompt, api_url, api_token)
+        prompt = build_prompt(pr_info, files, owner, repo, head_sha, github_token)
 
-    response = parse_response(claude_text)
-    if not response:
-        print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
-        logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
-        footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
-        fallback_body = (
+        print("  Calling Claude...", file=sys.stderr)
+        claude_text = call_claude(prompt, api_url, api_token)
+
+        response = parse_response(claude_text)
+        if not response:
+            print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
+            fallback_body = (
+                f"<h2>{logo} AI PR Review</h2>\n\n"
+                "Claude returned a response that could not be parsed as structured JSON.\n\n"
+                f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
+                f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
+            )
+            edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
+            set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
+            return
+
+        summary = response.get("summary", {})
+        comments = [
+            c
+            for c in response.get("comments", [])
+            if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
+        ]
+
+        summary_body = format_summary_comment(summary, comments, model_name)
+        post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token, placeholder_id)
+        set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
+
+        print("Done.", file=sys.stderr)
+
+    except Exception as exc:
+        print(f"  Review failed: {exc}", file=sys.stderr)
+        error_body = (
             f"<h2>{logo} AI PR Review</h2>\n\n"
-            "Claude returned a response that could not be parsed as structured JSON.\n\n"
-            f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
+            f":x: Review failed: `{type(exc).__name__}: {exc}`\n\n"
+            "This may be a transient issue. Type `/claude-review` in a comment to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
         )
-        edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
-        set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
-        return
-
-    summary = response.get("summary", {})
-    comments = [
-        c
-        for c in response.get("comments", [])
-        if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
-    ]
-
-    summary_body = format_summary_comment(summary, comments, model_name)
-    post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token, placeholder_id)
-    set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
-
-    print("Done.", file=sys.stderr)
+        try:
+            edit_comment(owner, repo, placeholder_id, error_body, github_token)
+            set_commit_status(owner, repo, head_sha, "error", "Review failed — type /claude-review to retry", github_token)
+        except Exception as cleanup_exc:
+            print(f"  Cleanup also failed: {cleanup_exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

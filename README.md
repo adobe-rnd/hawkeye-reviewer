@@ -18,7 +18,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  statuses: write
 
 jobs:
   ai_pr_review:

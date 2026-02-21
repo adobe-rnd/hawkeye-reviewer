@@ -20,6 +20,7 @@ permissions:
 jobs:
   ai_pr_review:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
     steps:
       - name: Claude Bedrock PR Review
         uses: adobe-rnd/claude-pr-reviewer@v1

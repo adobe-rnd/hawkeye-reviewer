@@ -1,4 +1,4 @@
-# Claude PR Reviewer
+# Claude Bedrock PR Reviewer
 
 AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Provides Copilot-style review comments with an overview, file-by-file summaries, and inline suggestions with code fixes.
 

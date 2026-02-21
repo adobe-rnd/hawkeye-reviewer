@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "7d8c29098c7c6015da41243b256c07b5646e26f1",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-02-21T13:17:31+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 1,
+    "total_deletions": 1,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 1,
+    "human_deletions": 1
+  },
+  "files": {
+    "action.yml": {
+      "ai_additions": 0,
+      "human_additions": 1,
+      "ai_deletions": 0,
+      "human_deletions": 1
+    }
+  }
+}

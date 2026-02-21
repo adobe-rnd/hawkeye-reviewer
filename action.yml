@@ -40,7 +40,25 @@ runs:
           -d '{"state":"pending","context":"Claude PR Review","description":"New commits pushed — type /claude-review to re-review."}'
         echo "Review status invalidated." >&2
 
-    # Full review path: uses system Python (pre-installed on ubuntu runners, no setup needed)
+    # Review path: post placeholder immediately via curl, then run the full review
+    - name: Post placeholder comment
+      id: placeholder
+      if: github.event_name != 'pull_request' || github.event.action != 'synchronize'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+        RESPONSE=$(curl -s -X POST \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+          -d '{"body":"<h2><img src=\"https://github.com/anthropics.png?size=36\" width=\"18\" height=\"18\" align=\"absmiddle\"> Reviewing your PR...</h2>\n\n:hourglass_flowing_sand: Claude is analyzing your changes. A detailed review with inline comments will appear here shortly."}')
+        COMMENT_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+        echo "comment-id=${COMMENT_ID}" >> "$GITHUB_OUTPUT"
+        echo "Placeholder comment posted (ID: ${COMMENT_ID})." >&2
+
     - name: Run Claude PR review
       if: github.event_name != 'pull_request' || github.event.action != 'synchronize'
       shell: bash
@@ -48,6 +66,7 @@ runs:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         CLAUDE_API_URL: ${{ inputs.claude-api-url }}
         CLAUDE_API_TOKEN: ${{ inputs.claude-api-token }}
+        PLACEHOLDER_COMMENT_ID: ${{ steps.placeholder.outputs.comment-id }}
       run: |
         PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
         python3 ${{ github.action_path }}/scripts/claude_pr_review.py \

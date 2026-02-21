@@ -547,7 +547,11 @@ def main() -> None:
     print(f"Reviewing PR #{pr_number} on {owner}/{repo} with {model_name}...", file=sys.stderr)
 
     set_commit_status(owner, repo, head_sha, "pending", f"{model_name} is reviewing this PR...", github_token)
-    placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
+
+    placeholder_id_str = os.environ.get("PLACEHOLDER_COMMENT_ID", "")
+    placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
+    if not placeholder_id:
+        placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
 
     files = get_changed_files(owner, repo, pr_number, github_token)
     print(f"  {len(files)} changed file(s).", file=sys.stderr)

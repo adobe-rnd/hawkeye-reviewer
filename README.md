@@ -30,7 +30,7 @@ jobs:
        contains(github.event.comment.body, '/claude-review'))
     steps:
       - name: Claude Bedrock PR Review
-        uses: adobe-rnd/claude-pr-reviewer@v1
+        uses: adobe-rnd/claude-pr-reviewer@v1.0.0
         with:
           app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
           claude-api-url: ${{ secrets.CLAUDE_API_URL }}

@@ -12,15 +12,22 @@ name: AI PR Review (Claude via Bedrock)
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 jobs:
   ai_pr_review:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/claude-review'))
     steps:
       - name: Claude Bedrock PR Review
         uses: adobe-rnd/claude-pr-reviewer@v1

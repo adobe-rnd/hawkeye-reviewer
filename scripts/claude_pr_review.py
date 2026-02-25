@@ -25,6 +25,7 @@ SEVERITY_ICONS = {
     "critical": ":rotating_light:",
     "warning": ":warning:",
     "suggestion": ":bulb:",
+    "design": ":triangular_ruler:",
     "nitpick": ":mag:",
 }
 
@@ -32,6 +33,7 @@ SEVERITY_LABELS = {
     "critical": "Critical",
     "warning": "Warning",
     "suggestion": "Suggestion",
+    "design": "Design",
     "nitpick": "Nitpick",
 }
 
@@ -228,6 +230,122 @@ def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> 
     return ""
 
 
+REPO_CONTEXT_FILES = [
+    # Multi-language version managers
+    ".tool-versions",
+    # Python
+    "pyproject.toml",
+    "setup.cfg",
+    "setup.py",
+    ".python-version",
+    "requirements.txt",
+    "Pipfile",
+    # JavaScript / TypeScript
+    "package.json",
+    "tsconfig.json",
+    ".nvmrc",
+    ".node-version",
+    # Java / Kotlin
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    # Scala
+    "build.sbt",
+    "project/build.properties",
+    # Go
+    "go.mod",
+    # Rust
+    "Cargo.toml",
+    # Containers & infrastructure
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    # General
+    ".editorconfig",
+]
+
+REPO_CONTEXT_MAX_PER_FILE = 2048
+REPO_CONTEXT_MAX_TOTAL = 12_000
+
+REPO_DOCS_FILES = [
+    "README.md",
+    "CONTRIBUTING.md",
+    "ARCHITECTURE.md",
+    "CLAUDE.md",
+    ".cursorrules",
+    ".cursor/rules/review.md",
+    ".cursor/rules/code-style.md",
+    ".github/CODEOWNERS",
+    ".github/pull_request_template.md",
+]
+
+REPO_DOCS_MAX_PER_FILE = 3000
+REPO_DOCS_MAX_TOTAL = 8000
+
+GUIDELINES_PATHS = [
+    ".github/claude-review.md",
+    ".claude-review.md",
+]
+
+GUIDELINES_MAX_CHARS = 4000
+
+
+def get_repo_context(owner: str, repo: str, ref: str, token: str) -> str:
+    """Fetch well-known config files from the repo to give Claude project context."""
+    blocks: list[str] = []
+    total_chars = 0
+
+    for path in REPO_CONTEXT_FILES:
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+        truncated = content[:REPO_CONTEXT_MAX_PER_FILE]
+        if len(content) > REPO_CONTEXT_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+        block = f"### {path}\n```\n{truncated}\n```"
+        if total_chars + len(block) > REPO_CONTEXT_MAX_TOTAL:
+            break
+        blocks.append(block)
+        total_chars += len(block)
+        print(f"  repo context: included {path} ({len(content)} chars)", file=sys.stderr)
+
+    return "\n\n".join(blocks)
+
+
+def get_repo_docs(owner: str, repo: str, ref: str, token: str) -> str:
+    """Fetch project documentation and convention files for additional review context."""
+    blocks: list[str] = []
+    total_chars = 0
+
+    for path in REPO_DOCS_FILES:
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+        truncated = content[:REPO_DOCS_MAX_PER_FILE]
+        if len(content) > REPO_DOCS_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+        block = f"### {path}\n```\n{truncated}\n```"
+        if total_chars + len(block) > REPO_DOCS_MAX_TOTAL:
+            break
+        blocks.append(block)
+        total_chars += len(block)
+        print(f"  repo docs: included {path} ({len(content)} chars)", file=sys.stderr)
+
+    return "\n\n".join(blocks)
+
+
+def get_review_guidelines(owner: str, repo: str, ref: str, token: str) -> str:
+    """Fetch optional review guidelines from the repo."""
+    for path in GUIDELINES_PATHS:
+        content = get_file_content(owner, repo, ref, path, token)
+        if content:
+            print(f"  review guidelines: loaded from {path}", file=sys.stderr)
+            if len(content) > GUIDELINES_MAX_CHARS:
+                return content[:GUIDELINES_MAX_CHARS] + "\n... (truncated)"
+            return content
+    return ""
+
+
 def get_diff_lines(patch: str) -> set[int]:
     """Parse a unified diff patch and return line numbers (new file side) that live inside a hunk."""
     if not patch:
@@ -261,6 +379,12 @@ REVIEW_PROMPT = textwrap.dedent("""\
     **Title:** {title}
     **Description:** {description}
 
+    {repo_context_section}
+
+    {repo_docs_section}
+
+    {guidelines_section}
+
     ## Response schema
 
     ```
@@ -276,7 +400,7 @@ REVIEW_PROMPT = textwrap.dedent("""\
         {{
           "path": "relative/file.py",
           "line": 42,
-          "severity": "critical | warning | suggestion | nitpick",
+          "severity": "critical | warning | suggestion | design | nitpick",
           "message": "Explanation of the issue and how to fix it.",
           "suggestion": "optional — the replacement line(s) that fix the issue"
         }}
@@ -289,16 +413,100 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - "suggestion" must be the exact replacement code (no line-number prefix, no
       explanation) so it can be used in a GitHub "suggested change" block.
       Multi-line suggestions are fine (separate lines with \\n).
-    - Focus on: correctness bugs, security issues, missing error handling,
-      performance problems, and important improvements.
     - Do NOT comment on minor style/formatting preferences.
     - Keep each "message" to 1-3 sentences — concise and actionable.
+    - Use the repository context (language versions, dependencies, config) to
+      calibrate your review. Do not suggest patterns or syntax incompatible with
+      the project's declared runtime, frameworks, or dependencies.
+    - If repository guidelines are provided, follow them. They take precedence
+      over your default review preferences.
     - If everything looks good, return {{"summary": {{...}}, "comments": []}}.
+
+    ## What to look for
+
+    Review like a senior engineer with 10+ years of experience. Work through each
+    of these categories systematically for every changed file:
+
+    ### Correctness and edge cases
+    - Null/nil/None dereferences, missing nil checks
+    - Empty collections passed where non-empty is assumed
+    - Off-by-one errors in loops, slices, and ranges
+    - Integer overflow, underflow, or truncation on cast
+    - Unicode and encoding issues in string processing
+    - Boundary values: zero, negative, max-int, empty string
+
+    ### Security
+    - Hardcoded secrets, API keys, passwords, or tokens
+    - SQL injection (string concatenation in queries)
+    - XSS (unsanitized user input rendered in HTML)
+    - Path traversal (user input in file paths without sanitization)
+    - SSRF (user-controlled URLs in server-side requests)
+    - Insecure deserialization of untrusted data
+    - Missing input validation or overly permissive allow-lists
+    - Overly broad CORS, IAM, or file permissions
+
+    ### Concurrency and thread safety
+    - Race conditions on shared mutable state
+    - Missing locks, synchronization, or atomic operations
+    - Deadlock potential (lock ordering issues)
+    - Non-atomic check-then-act patterns (TOCTOU)
+    - Unsafe publication of objects between threads
+
+    ### Resource management
+    - Unclosed connections, file handles, streams, or sockets
+    - Missing try-with-resources, context managers, or defer statements
+    - Potential memory leaks (unbounded caches, growing collections, listeners
+      not removed)
+    - Unbounded queues or buffers that can cause OOM under load
+
+    ### Error handling
+    - Swallowed exceptions (empty catch/except blocks)
+    - Generic catch-all handlers that hide root causes
+    - Error messages that lack context for debugging in production
+    - Missing cleanup or rollback in error/failure paths
+    - Panics or unchecked exceptions that could crash the process
+
+    ### Test coverage
+    - New logic or branches added without corresponding test cases
+    - Tests that assert on the wrong thing or don't actually verify behavior
+    - Missing edge case tests for the boundary conditions listed above
+    - Flaky test patterns (time-dependent, order-dependent, non-deterministic)
+
+    ### API design and contracts
+    - Breaking changes to public interfaces or method signatures
+    - Missing input validation at API boundaries
+    - Inconsistent return types, error formats, or status codes
+    - Missing or incorrect documentation on public APIs
+
+    ### Design improvements (use "design" severity)
+    - Algorithm and data structure choices (e.g. DFS vs BFS, hash map vs sorted
+      set, quadratic vs linear approach)
+    - More suitable libraries or built-in functions that simplify the code
+    - Language-specific optimizations (e.g. Java streams/virtual threads, Python
+      generators/slots, Go channels, Scala tail recursion, Rust zero-cost
+      abstractions)
+    - Architectural decisions (e.g. Fargate vs Lambda, queues vs synchronous
+      calls, caching layers)
+    - Scalability concerns and cost optimization opportunities
 
     ## Changed files
 
     {files_text}
 """)
+
+
+def _build_file_block(path: str, status: str, content: str, patch: str) -> str:
+    """Build a full file block with numbered source and diff."""
+    numbered = "\n".join(
+        f"{i}: {line}" for i, line in enumerate(content.splitlines(), start=1)
+    )
+    diff_section = f"\nDIFF:\n{patch}\n" if patch else ""
+    return f"FILE: {path} (status: {status})\n{numbered}{diff_section}\n\n"
+
+
+def _build_diff_only_block(path: str, status: str, patch: str) -> str:
+    """Build a lighter block containing only the diff (no full source)."""
+    return f"FILE: {path} (status: {status}) [diff only — file too large for full content]\nDIFF:\n{patch}\n\n"
 
 
 def build_prompt(
@@ -310,37 +518,79 @@ def build_prompt(
     token: str,
 ) -> str:
     included_files: list[str] = []
+    skipped_files: list[str] = []
     total_chars = 0
-    max_chars = 80_000
+    max_chars = 180_000
 
     for f in files:
         if f.get("status") == "removed":
             continue
         path = f["filename"]
-        if f.get("changes", 0) > 800:
+        patch = f.get("patch", "")
+        status = f.get("status", "modified")
+        changes = f.get("changes", 0)
+
+        if changes > 800:
+            if patch:
+                block = _build_diff_only_block(path, status, patch)
+                if total_chars + len(block) <= max_chars:
+                    included_files.append(block)
+                    total_chars += len(block)
+                    print(f"  {path}: included diff only ({changes} changes, too large for full content)", file=sys.stderr)
+                    continue
+            skipped_files.append(f"{path} ({changes} changes — exceeded budget even for diff)")
+            print(f"  {path}: skipped ({changes} changes, exceeded budget)", file=sys.stderr)
             continue
 
         content = get_file_content(owner, repo, head_sha, path, token)
         if not content:
+            if patch:
+                block = _build_diff_only_block(path, status, patch)
+                if total_chars + len(block) <= max_chars:
+                    included_files.append(block)
+                    total_chars += len(block)
+                    print(f"  {path}: included diff only (could not fetch content)", file=sys.stderr)
+                    continue
+            skipped_files.append(f"{path} (could not fetch content)")
             continue
 
-        numbered = "\n".join(
-            f"{i}: {line}" for i, line in enumerate(content.splitlines(), start=1)
-        )
-        patch = f.get("patch", "")
-        diff_section = f"\nDIFF:\n{patch}\n" if patch else ""
-        block = f"FILE: {path} (status: {f.get('status', 'modified')})\n{numbered}{diff_section}\n\n"
+        block = _build_file_block(path, status, content, patch)
 
         if total_chars + len(block) > max_chars:
-            break
+            if patch:
+                fallback = _build_diff_only_block(path, status, patch)
+                if total_chars + len(fallback) <= max_chars:
+                    included_files.append(fallback)
+                    total_chars += len(fallback)
+                    print(f"  {path}: included diff only (full content exceeded budget)", file=sys.stderr)
+                    continue
+            skipped_files.append(f"{path} (exceeded budget)")
+            print(f"  {path}: skipped (exceeded budget)", file=sys.stderr)
+            continue
+
         included_files.append(block)
         total_chars += len(block)
 
+    if skipped_files:
+        print(f"  {len(skipped_files)} file(s) skipped: {'; '.join(skipped_files)}", file=sys.stderr)
+
     files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
+
+    repo_context = get_repo_context(owner, repo, head_sha, token)
+    repo_context_section = f"## Repository context\n\n{repo_context}" if repo_context else ""
+
+    repo_docs = get_repo_docs(owner, repo, head_sha, token)
+    repo_docs_section = f"## Project documentation\n\n{repo_docs}" if repo_docs else ""
+
+    guidelines = get_review_guidelines(owner, repo, head_sha, token)
+    guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
 
     return REVIEW_PROMPT.format(
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
+        repo_context_section=repo_context_section,
+        repo_docs_section=repo_docs_section,
+        guidelines_section=guidelines_section,
         files_text=files_text,
     )
 
@@ -461,6 +711,61 @@ def format_inline_body(comment: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def get_existing_review_comments(owner: str, repo: str, pr_number: int, token: str) -> set[tuple[str, int, str]]:
+    """Fetch existing review comments and return a set of (path, line, severity_label) tuples."""
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}/comments"
+    existing: set[tuple[str, int, str]] = set()
+    page = 1
+    while True:
+        try:
+            batch = github_get(url, token, params={"page": str(page), "per_page": "100"})
+        except RuntimeError:
+            break
+        if not batch:
+            break
+        for c in batch:
+            path = c.get("path", "")
+            line = c.get("line") or c.get("original_line")
+            body = c.get("body", "")
+            if not path or not isinstance(line, int):
+                continue
+            for label in SEVERITY_LABELS.values():
+                if f"**{label}**" in body:
+                    existing.add((path, line, label))
+                    break
+        page += 1
+    return existing
+
+
+def filter_comments(
+    inline_comments: list[dict],
+    valid_lines: dict[str, set[int]],
+    existing_comments: set[tuple[str, int, str]],
+) -> list[dict]:
+    """Filter out comments that are outside the diff or already posted."""
+    filtered: list[dict] = []
+    deduped = 0
+    for c in inline_comments:
+        path = c.get("path", "")
+        line = c.get("line")
+        if not path or not isinstance(line, int):
+            continue
+        if path not in valid_lines or line not in valid_lines[path]:
+            print(f"  Skipped (not in diff): {path}:{line}", file=sys.stderr)
+            continue
+        sev = c.get("severity", "suggestion")
+        label = SEVERITY_LABELS.get(sev, "Suggestion")
+        if (path, line, label) in existing_comments:
+            deduped += 1
+            print(f"  Skipped (duplicate): {path}:{line} [{label}]", file=sys.stderr)
+            continue
+        filtered.append(c)
+
+    if deduped:
+        print(f"  {deduped} duplicate comment(s) skipped.", file=sys.stderr)
+    return filtered
+
+
 def post_review(
     owner: str,
     repo: str,
@@ -468,7 +773,6 @@ def post_review(
     commit_sha: str,
     summary_body: str,
     inline_comments: list[dict],
-    valid_lines: dict[str, set[int]],
     token: str,
     placeholder_comment_id: int | None = None,
 ) -> None:
@@ -486,19 +790,9 @@ def post_review(
 
     review_comments: list[dict] = []
     for c in inline_comments:
-        path = c.get("path", "")
-        line = c.get("line")
-        if not path or not isinstance(line, int):
-            continue
-        if path in valid_lines and line in valid_lines[path]:
-            review_comments.append(
-                {"path": path, "line": line, "side": "RIGHT", "body": format_inline_body(c)}
-            )
-        else:
-            print(f"  Skipped (not in diff): {path}:{line}", file=sys.stderr)
-
-    if not review_comments:
-        return
+        review_comments.append(
+            {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": format_inline_body(c)}
+        )
 
     review_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
     payload = {"commit_id": commit_sha, "event": "COMMENT", "comments": review_comments}
@@ -598,14 +892,19 @@ def main() -> None:
             return
 
         summary = response.get("summary", {})
-        comments = [
+        raw_comments = [
             c
             for c in response.get("comments", [])
             if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
         ]
 
+        existing = get_existing_review_comments(owner, repo, pr_number, github_token)
+        if existing:
+            print(f"  Found {len(existing)} existing review comment(s) for dedup.", file=sys.stderr)
+        comments = filter_comments(raw_comments, valid_lines, existing)
+
         summary_body = format_summary_comment(summary, comments, model_name)
-        post_review(owner, repo, pr_number, head_sha, summary_body, comments, valid_lines, github_token, placeholder_id)
+        post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)
         set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
 
         print("Done.", file=sys.stderr)

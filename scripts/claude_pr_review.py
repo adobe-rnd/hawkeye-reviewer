@@ -22,11 +22,11 @@ CLAUDE_AVATAR = "https://github.com/anthropics.png?size=36"
 STATUS_CONTEXT = "Claude Bedrock PR Review"
 
 SEVERITY_ICONS = {
-    "critical": ":rotating_light:",
-    "warning": ":warning:",
-    "suggestion": ":bulb:",
-    "design": ":triangular_ruler:",
-    "nitpick": ":mag:",
+    "critical": "\U0001f6a8",
+    "warning": "\u26a0\ufe0f",
+    "suggestion": "\U0001f4a1",
+    "design": "\U0001f4d0",
+    "nitpick": "\U0001f50d",
 }
 
 SEVERITY_LABELS = {
@@ -173,7 +173,7 @@ def set_commit_status(owner: str, repo: str, sha: str, state: str, description: 
 PLACEHOLDER_BODY = (
     f'<h2><img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle"> '
     "Reviewing your PR...</h2>\n\n"
-    ":hourglass_flowing_sand: Claude is analyzing your changes. "
+    "\u23f3 Claude is analyzing your changes. "
     "A detailed review with inline comments will appear here shortly."
 )
 
@@ -660,6 +660,7 @@ def build_prompt(
     repo: str,
     head_sha: str,
     token: str,
+    related_context: str = "",
 ) -> str:
     included_files: list[str] = []
     skipped_files: list[str] = []
@@ -729,7 +730,6 @@ def build_prompt(
     guidelines = get_review_guidelines(owner, repo, head_sha, token)
     guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
 
-    related_context = get_related_context(files, owner, repo, head_sha, token)
     related_context_section = (
         f"## Related context files (not part of this PR)\n\n"
         f"These files are NOT being changed but may be affected by or relevant to the changes above.\n\n"
@@ -831,7 +831,7 @@ def format_summary_comment(summary: dict, comments: list[dict], model_name: str 
         )
     else:
         parts.append(
-            "\n---\n:white_check_mark: No issues found — looks good!"
+            "\n---\n\u2705 No issues found — looks good!"
         )
 
     footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
@@ -845,7 +845,7 @@ def format_summary_comment(summary: dict, comments: list[dict], model_name: str 
 
 def format_inline_body(comment: dict) -> str:
     sev = comment.get("severity", "suggestion")
-    icon = SEVERITY_ICONS.get(sev, ":bulb:")
+    icon = SEVERITY_ICONS.get(sev, "\U0001f4a1")
     label = SEVERITY_LABELS.get(sev, "Suggestion")
     message = comment.get("message", "")
 
@@ -1023,10 +1023,7 @@ MIN_ADDITIONS_FOR_RETRY = 150
 def build_retry_prompt(
     pr_info: dict,
     files: list[dict],
-    owner: str,
-    repo: str,
-    head_sha: str,
-    token: str,
+    related_context: str = "",
 ) -> str:
     """Build a shorter, diff-only prompt for the second-pass review."""
     diffs: list[str] = []
@@ -1044,7 +1041,6 @@ def build_retry_prompt(
 
     diffs_text = "\n".join(diffs) if diffs else "(no diffs)"
 
-    related_context = get_related_context(files, owner, repo, head_sha, token)
     related_context_section = (
         f"## Related context files (not part of this PR)\n\n{related_context}"
     ) if related_context else ""
@@ -1116,7 +1112,8 @@ def main() -> None:
         for f in files:
             valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
 
-        prompt = build_prompt(pr_info, files, owner, repo, head_sha, github_token)
+        related_context = get_related_context(files, owner, repo, head_sha, github_token)
+        prompt = build_prompt(pr_info, files, owner, repo, head_sha, github_token, related_context)
 
         print("  Calling Claude...", file=sys.stderr)
         claude_text = call_claude(prompt, api_url, api_token)
@@ -1160,7 +1157,7 @@ def main() -> None:
                 f"  Zero comments on {total_additions} additions — running second-pass review...",
                 file=sys.stderr,
             )
-            retry_prompt = build_retry_prompt(pr_info, files, owner, repo, head_sha, github_token)
+            retry_prompt = build_retry_prompt(pr_info, files, related_context)
             retry_text = call_claude(retry_prompt, api_url, api_token)
             retry_response = parse_response(retry_text)
             if retry_response:
@@ -1189,7 +1186,7 @@ def main() -> None:
         print(f"  Review failed: {exc}", file=sys.stderr)
         error_body = (
             f"<h2>{logo} AI PR Review</h2>\n\n"
-            f":x: Review failed: `{type(exc).__name__}: {exc}`\n\n"
+            f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
             "This may be a transient issue. Type `/claude-review` in a comment to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
         )

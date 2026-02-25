@@ -346,6 +346,126 @@ def get_review_guidelines(owner: str, repo: str, ref: str, token: str) -> str:
     return ""
 
 
+RELATED_BUILD_FILES = [
+    "vite.config.ts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "webpack.config.js",
+    "webpack.config.ts",
+    "webpack.config.mjs",
+    "next.config.js",
+    "next.config.mjs",
+    "next.config.ts",
+    "rollup.config.js",
+    "rollup.config.mjs",
+    "jest.config.js",
+    "jest.config.ts",
+    "jest.config.mjs",
+    "vitest.config.ts",
+    "vitest.config.js",
+]
+
+RELATED_CONTEXT_MAX_PER_FILE = 3000
+RELATED_CONTEXT_MAX_TOTAL = 15_000
+
+
+def _infer_test_paths(filepath: str) -> list[str]:
+    """Given a source file path, return candidate test file paths to look for."""
+    if not filepath or filepath.startswith("."):
+        return []
+    # Skip files that are already tests
+    base = os.path.basename(filepath)
+    if any(marker in base for marker in [".test.", ".spec.", "__test__"]):
+        return []
+    # Skip non-source files
+    name, ext = os.path.splitext(base)
+    if ext not in (".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts"):
+        return []
+
+    dirpart = os.path.dirname(filepath)
+    candidates = [
+        os.path.join(dirpart, f"{name}.test{ext}"),
+        os.path.join(dirpart, f"{name}.spec{ext}"),
+        os.path.join(dirpart, "__tests__", f"{name}{ext}"),
+        os.path.join(dirpart, "__tests__", f"{name}.test{ext}"),
+    ]
+    if ext == ".py":
+        candidates.append(os.path.join(dirpart, f"test_{name}{ext}"))
+        if dirpart:
+            parent = os.path.dirname(dirpart)
+            leaf = os.path.basename(dirpart)
+            candidates.append(os.path.join(parent, "tests", leaf, f"test_{name}{ext}"))
+            candidates.append(os.path.join(parent, "tests", f"test_{name}{ext}"))
+        else:
+            candidates.append(os.path.join("tests", f"test_{name}{ext}"))
+    return candidates
+
+
+def _infer_build_config_paths(changed_files: list[dict]) -> list[str]:
+    """Identify build config files that might be relevant based on changed file locations."""
+    dirs_seen: set[str] = set()
+    for f in changed_files:
+        path = f.get("filename", "")
+        parts = path.split("/")
+        # Collect root and first-level directories that might have their own configs
+        if len(parts) > 1:
+            dirs_seen.add(parts[0])
+
+    paths: list[str] = []
+    # Root-level build configs
+    paths.extend(RELATED_BUILD_FILES)
+    # Subproject build configs (e.g. dashboard/vite.config.ts)
+    for d in sorted(dirs_seen):
+        for cfg in RELATED_BUILD_FILES:
+            paths.append(f"{d}/{cfg}")
+    return paths
+
+
+def get_related_context(
+    changed_files: list[dict],
+    owner: str,
+    repo: str,
+    ref: str,
+    token: str,
+) -> str:
+    """Fetch test files and build configs related to the changed files."""
+    blocks: list[str] = []
+    total_chars = 0
+    fetched: set[str] = set()
+    changed_paths = {f["filename"] for f in changed_files}
+
+    # Collect all candidate paths (test files + build configs)
+    candidates: list[tuple[str, str]] = []  # (path, reason)
+
+    for f in changed_files:
+        for tp in _infer_test_paths(f["filename"]):
+            if tp not in changed_paths:
+                candidates.append((tp, f"test for {f['filename']}"))
+
+    for bp in _infer_build_config_paths(changed_files):
+        if bp not in changed_paths:
+            candidates.append((bp, "build config"))
+
+    for path, reason in candidates:
+        if path in fetched or total_chars >= RELATED_CONTEXT_MAX_TOTAL:
+            continue
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+        fetched.add(path)
+        truncated = content[:RELATED_CONTEXT_MAX_PER_FILE]
+        if len(content) > RELATED_CONTEXT_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+        block = f"### {path}\n_Reason: {reason}_\n```\n{truncated}\n```"
+        if total_chars + len(block) > RELATED_CONTEXT_MAX_TOTAL:
+            break
+        blocks.append(block)
+        total_chars += len(block)
+        print(f"  related context: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
+
+    return "\n\n".join(blocks)
+
+
 def get_diff_lines(patch: str) -> set[int]:
     """Parse a unified diff patch and return line numbers (new file side) that live inside a hunk."""
     if not patch:
@@ -420,7 +540,18 @@ REVIEW_PROMPT = textwrap.dedent("""\
       the project's declared runtime, frameworks, or dependencies.
     - If repository guidelines are provided, follow them. They take precedence
       over your default review preferences.
-    - If everything looks good, return {{"summary": {{...}}, "comments": []}}.
+    - Be thorough and critical. A pull request with more than a handful of
+      additions almost always has at least one issue worth flagging. It is better
+      to surface a potential concern that turns out to be fine than to miss a real
+      bug, security hole, or broken contract.
+    - Think about cross-file implications: does a change in one file break
+      assumptions, tests, or contracts in another? Consider build/bundler configs,
+      test mocks, API schemas, security definitions, and deployment settings.
+    - If related context files (tests, configs) are provided below, use them to
+      catch issues like broken test mocks, incompatible build settings, or
+      mismatched API contracts.
+    - Only return an empty "comments" array after you have carefully examined
+      every changed file and genuinely found nothing actionable.
 
     ## What to look for
 
@@ -488,6 +619,19 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - Architectural decisions (e.g. Fargate vs Lambda, queues vs synchronous
       calls, caching layers)
     - Scalability concerns and cost optimization opportunities
+
+    ### Cross-file and integration concerns
+    - Imports/requires that reference paths outside the project or build root
+    - Existing test files that mock or stub behavior being changed (broken mocks)
+    - OpenAPI/Swagger specs: global security schemes inherited by new endpoints,
+      missing security overrides on public routes
+    - Build tool configs (Vite, Webpack, Rollup, etc.) that may not support new
+      import patterns or file locations
+    - Infrastructure-as-code (CDK, Terraform, CloudFormation) that contradicts
+      the API spec or application config
+    - Database migrations or schema changes that are inconsistent with ORM models
+
+    {related_context_section}
 
     ## Changed files
 
@@ -585,12 +729,20 @@ def build_prompt(
     guidelines = get_review_guidelines(owner, repo, head_sha, token)
     guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
 
+    related_context = get_related_context(files, owner, repo, head_sha, token)
+    related_context_section = (
+        f"## Related context files (not part of this PR)\n\n"
+        f"These files are NOT being changed but may be affected by or relevant to the changes above.\n\n"
+        f"{related_context}"
+    ) if related_context else ""
+
     return REVIEW_PROMPT.format(
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
         repo_context_section=repo_context_section,
         repo_docs_section=repo_docs_section,
         guidelines_section=guidelines_section,
+        related_context_section=related_context_section,
         files_text=files_text,
     )
 
@@ -816,6 +968,97 @@ def post_review(
         print(f"{len(review_comments)} inline comments posted.", file=sys.stderr)
 
 
+RETRY_PROMPT = textwrap.dedent("""\
+    You are an expert code reviewer performing a second-pass review of a pull
+    request. Your first review found zero issues, but the PR has {total_additions}
+    additions across {num_files} files — this warrants a closer look.
+
+    Re-examine the diffs below with a more critical eye. Pay special attention to:
+
+    1. **Cross-file implications** — do changes in one file break assumptions,
+       mocks, or contracts in other files (including files not in this PR)?
+    2. **Security configuration** — OpenAPI/Swagger global security schemes
+       inherited by new endpoints, missing auth overrides on public routes,
+       overly broad IAM or CORS permissions.
+    3. **Build and bundler compatibility** — imports referencing paths outside
+       the project root, new file patterns unsupported by the build tool config.
+    4. **Test coverage gaps** — existing tests that mock or stub behavior being
+       changed, new logic paths without test coverage.
+    5. **API contract consistency** — schema references, error response formats,
+       status codes, and documentation accuracy.
+
+    Respond with a single JSON object (no markdown fences):
+
+    ```
+    {{
+      "comments": [
+        {{
+          "path": "relative/file.py",
+          "line": 42,
+          "severity": "critical | warning | suggestion | design | nitpick",
+          "message": "Explanation of the issue and how to fix it.",
+          "suggestion": "optional replacement code"
+        }}
+      ]
+    }}
+    ```
+
+    Only comment on ADDED (+) lines. If you still genuinely find nothing after
+    careful re-examination, return {{"comments": []}}.
+
+    ## Pull Request
+    **Title:** {title}
+    **Description:** {description}
+
+    {related_context_section}
+
+    ## Changed files (diffs only)
+
+    {diffs_text}
+""")
+
+MIN_ADDITIONS_FOR_RETRY = 150
+
+
+def build_retry_prompt(
+    pr_info: dict,
+    files: list[dict],
+    owner: str,
+    repo: str,
+    head_sha: str,
+    token: str,
+) -> str:
+    """Build a shorter, diff-only prompt for the second-pass review."""
+    diffs: list[str] = []
+    total_additions = sum(f.get("additions", 0) for f in files)
+
+    for f in files:
+        if f.get("status") == "removed":
+            continue
+        patch = f.get("patch", "")
+        if not patch:
+            continue
+        path = f["filename"]
+        status = f.get("status", "modified")
+        diffs.append(f"FILE: {path} (status: {status})\nDIFF:\n{patch}\n")
+
+    diffs_text = "\n".join(diffs) if diffs else "(no diffs)"
+
+    related_context = get_related_context(files, owner, repo, head_sha, token)
+    related_context_section = (
+        f"## Related context files (not part of this PR)\n\n{related_context}"
+    ) if related_context else ""
+
+    return RETRY_PROMPT.format(
+        total_additions=total_additions,
+        num_files=len([f for f in files if f.get("status") != "removed"]),
+        title=pr_info.get("title", ""),
+        description=(pr_info.get("body") or "(no description)")[:2000],
+        related_context_section=related_context_section,
+        diffs_text=diffs_text,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -892,16 +1135,49 @@ def main() -> None:
             return
 
         summary = response.get("summary", {})
+        all_returned = response.get("comments", [])
         raw_comments = [
             c
-            for c in response.get("comments", [])
+            for c in all_returned
             if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
         ]
+        print(
+            f"  Claude returned {len(all_returned)} comment(s), "
+            f"{len(raw_comments)} valid after schema check.",
+            file=sys.stderr,
+        )
 
         existing = get_existing_review_comments(owner, repo, pr_number, github_token)
         if existing:
             print(f"  Found {len(existing)} existing review comment(s) for dedup.", file=sys.stderr)
         comments = filter_comments(raw_comments, valid_lines, existing)
+        print(f"  {len(comments)} comment(s) survived filtering.", file=sys.stderr)
+
+        # Second-pass review if first pass found nothing on a large PR
+        total_additions = sum(f.get("additions", 0) for f in files)
+        if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:
+            print(
+                f"  Zero comments on {total_additions} additions — running second-pass review...",
+                file=sys.stderr,
+            )
+            retry_prompt = build_retry_prompt(pr_info, files, owner, repo, head_sha, github_token)
+            retry_text = call_claude(retry_prompt, api_url, api_token)
+            retry_response = parse_response(retry_text)
+            if retry_response:
+                retry_all = retry_response.get("comments", [])
+                retry_raw = [
+                    c
+                    for c in retry_all
+                    if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
+                ]
+                print(
+                    f"  Second pass returned {len(retry_all)} comment(s), "
+                    f"{len(retry_raw)} valid.",
+                    file=sys.stderr,
+                )
+                retry_comments = filter_comments(retry_raw, valid_lines, existing)
+                print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
+                comments.extend(retry_comments)
 
         summary_body = format_summary_comment(summary, comments, model_name)
         post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)

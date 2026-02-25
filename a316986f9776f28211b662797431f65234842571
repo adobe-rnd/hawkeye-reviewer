@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "a316986f9776f28211b662797431f65234842571",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-02-26T00:36:31+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "cursor",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 278,
+    "total_deletions": 0,
+    "ai_additions": 278,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/claude_pr_review.py": {
+      "ai_additions": 278,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "349-468,543-554,622-634,732-738,745,971-1061,1138,1141,1144-1148,1154-1180",
+      "human_lines": ""
+    }
+  }
+}

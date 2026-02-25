@@ -76,7 +76,7 @@ jobs:
        github.event.comment.author_association != 'NONE')
     steps:
       - name: Claude Bedrock PR Review
-        uses: adobe-rnd/claude-pr-reviewer@v1.0.0
+        uses: adobe-rnd/claude-pr-reviewer@v1
         with:
           app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
           claude-api-url: ${{ secrets.CLAUDE_API_URL }}

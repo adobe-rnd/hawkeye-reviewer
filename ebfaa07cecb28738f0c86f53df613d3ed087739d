@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "ebfaa07cecb28738f0c86f53df613d3ed087739d",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-02-27T12:46:36+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 11,
+    "total_deletions": 8,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 11,
+    "human_deletions": 8
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 0,
+      "human_additions": 11,
+      "ai_deletions": 0,
+      "human_deletions": 8
+    }
+  }
+}

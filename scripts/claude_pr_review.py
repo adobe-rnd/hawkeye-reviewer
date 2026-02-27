@@ -631,6 +631,19 @@ REVIEW_PROMPT = textwrap.dedent("""\
       the API spec or application config
     - Database migrations or schema changes that are inconsistent with ORM models
 
+    ### Dead code and unused artifacts
+    - Commented-out code that was committed instead of deleted (stale TODOs,
+      disabled logic blocks, or code "saved for later")
+    - Unreachable code after early returns, throws, break, continue, or
+      unconditional exits
+    - Variables, constants, or parameters that are declared but never read
+    - Unused imports or require statements
+    - Functions, methods, or classes defined in the PR that are never called or
+      referenced anywhere in the changed files or existing codebase context
+    - Dead feature-flag branches where the flag is hard-coded or already removed
+    - Logging or debug statements (console.log, print, System.out) that appear
+      to be leftover from development rather than intentional observability
+
     {related_context_section}
 
     ## Changed files

@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "8f28bf87d9b93149a70d32f250258da764e8e880",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-02-27T12:37:46+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 813,
+    "total_deletions": 0,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 813,
+    "human_deletions": 0
+  },
+  "files": {
+    ".DS_Store": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/01_system_architecture.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/02_review_flow.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/03_context_window.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/04_github_integration.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/generate_diagrams.py": {
+      "ai_additions": 0,
+      "human_additions": 800,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "scripts/claude_pr_review.py": {
+      "ai_additions": 0,
+      "human_additions": 13,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    }
+  }
+}

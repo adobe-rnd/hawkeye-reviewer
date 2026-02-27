@@ -11,7 +11,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 - **Custom guidelines** — optional `.github/claude-review.md` for repo-specific review instructions
 - **Inline code suggestions** with GitHub's native suggestion blocks (one-click apply)
 - **5 severity levels** — critical, warning, suggestion, design, nitpick — each with distinct icons
-- **Senior-level review checklist** — security, concurrency, edge cases, resource management, test coverage, API contracts, and design improvements
+- **Senior-level review checklist** — security, concurrency, edge cases, resource management, test coverage, API contracts, design improvements, and dead code detection
 - **Comment deduplication** — skips duplicate comments on re-review so you don't get the same feedback twice
 - **Instant feedback** — posts a placeholder comment immediately while Claude analyzes
 - **Merge gate** — sets a commit status (`Claude Bedrock PR Review`) that can be required in branch protection rules
@@ -21,15 +21,17 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 
 ## Setup
 
-### 1. Repository secrets
+### 1. Secrets and variables
 
-Add these in **Settings > Secrets and variables > Actions**:
+`CLAUDE_REVIEWER_APP_PRIVATE_KEY` should be set as an **organization-level** secret so it's available to all repos automatically (**Settings > Secrets and variables > Actions** at the org level).
 
-| Secret | Required | Description |
-|--------|----------|-------------|
-| `CLAUDE_REVIEWER_APP_PRIVATE_KEY` | Yes | The GitHub App's private key (`.pem` contents) |
-| `CLAUDE_API_URL` | Yes | Bedrock converse endpoint URL (see example below) |
-| `CLAUDE_API_TOKEN` | Yes | Bearer token for the Bedrock API |
+The remaining secrets can be set at the org or repo level:
+
+| Secret | Level | Required | Description |
+|--------|-------|----------|-------------|
+| `CLAUDE_REVIEWER_APP_PRIVATE_KEY` | Org | Yes | The GitHub App's private key (`.pem` contents) |
+| `CLAUDE_API_URL` | Org or Repo | Yes | Bedrock converse endpoint URL (see example below) |
+| `CLAUDE_API_TOKEN` | Org or Repo | Yes | Bearer token for the Bedrock API |
 
 Example `CLAUDE_API_URL`:
 
@@ -153,6 +155,7 @@ The reviewer works through a comprehensive checklist for every changed file:
 | **Test coverage** | Missing tests for new logic, weak assertions, missing edge case tests, flaky test patterns |
 | **API contracts** | Breaking changes, missing input validation, inconsistent error formats |
 | **Design** | Algorithm/data structure choices, language-specific optimizations, architectural decisions, library suggestions, scalability concerns |
+| **Dead code** | Commented-out code, unreachable code, unused variables/imports/functions, dead feature-flag branches, leftover debug statements |
 
 ## Severity levels
 

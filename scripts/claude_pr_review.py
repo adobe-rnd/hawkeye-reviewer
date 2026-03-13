@@ -324,6 +324,10 @@ REPO_DOCS_MAX_PER_FILE = 3000
 REPO_DOCS_MAX_TOTAL = 8000
 
 LINTER_CONFIG_FILES = [
+    # Multi-language manifests (often contain embedded linter/formatter config)
+    "pyproject.toml",
+    "setup.cfg",
+    "package.json",
     # Python
     ".flake8",
     ".pylintrc",
@@ -400,6 +404,27 @@ LINTER_CONFIG_FILES = [
     ".markdownlint.yaml",
 ]
 
+LINTER_CONFIG_FALLBACK_FILES = [
+    "pyproject.toml",
+    "setup.cfg",
+    "package.json",
+    ".flake8",
+    "ruff.toml",
+    ".ruff.toml",
+    ".eslintrc.json",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "eslint.config.ts",
+    ".prettierrc",
+    ".prettierrc.json",
+    "biome.json",
+    ".golangci.yml",
+    "rustfmt.toml",
+    ".rubocop.yml",
+    ".clang-format",
+    ".editorconfig",
+]
+
 LINTER_CONFIG_MAX_PER_FILE = 3000
 LINTER_CONFIG_MAX_TOTAL = 12_000
 
@@ -474,13 +499,22 @@ def get_review_guidelines(owner: str, repo: str, ref: str, token: str, tree_path
 
 
 def get_linter_config(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
-    """Fetch linter and formatter configuration files from the repo."""
+    """Fetch linter and formatter configuration files from the repo.
+
+    When tree_paths is available, checks the full LINTER_CONFIG_FILES list
+    cheaply via set lookup. When tree_paths is None (Git Trees API truncated
+    or failed), falls back to a small high-signal subset to avoid excessive
+    API calls.
+    """
+    if tree_paths is not None:
+        candidates = [p for p in LINTER_CONFIG_FILES if p in tree_paths]
+    else:
+        candidates = list(LINTER_CONFIG_FALLBACK_FILES)
+
     blocks: list[str] = []
     total_chars = 0
 
-    for path in LINTER_CONFIG_FILES:
-        if tree_paths is not None and path not in tree_paths:
-            continue
+    for path in candidates:
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue

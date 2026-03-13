@@ -323,6 +323,86 @@ REPO_DOCS_FILES = [
 REPO_DOCS_MAX_PER_FILE = 3000
 REPO_DOCS_MAX_TOTAL = 8000
 
+LINTER_CONFIG_FILES = [
+    # Python
+    ".flake8",
+    ".pylintrc",
+    "pylintrc",
+    "ruff.toml",
+    ".ruff.toml",
+    ".isort.cfg",
+    ".mypy.ini",
+    "mypy.ini",
+    ".bandit",
+    ".pyre_configuration",
+    # JavaScript / TypeScript
+    ".eslintrc",
+    ".eslintrc.js",
+    ".eslintrc.cjs",
+    ".eslintrc.json",
+    ".eslintrc.yml",
+    ".eslintrc.yaml",
+    "eslint.config.js",
+    "eslint.config.mjs",
+    "eslint.config.cjs",
+    "eslint.config.ts",
+    ".prettierrc",
+    ".prettierrc.json",
+    ".prettierrc.js",
+    ".prettierrc.cjs",
+    ".prettierrc.yml",
+    ".prettierrc.yaml",
+    ".prettierrc.toml",
+    "prettier.config.js",
+    "prettier.config.mjs",
+    "prettier.config.cjs",
+    "biome.json",
+    "biome.jsonc",
+    "deno.json",
+    "deno.jsonc",
+    # Go
+    ".golangci.yml",
+    ".golangci.yaml",
+    ".golangci.json",
+    ".golangci.toml",
+    # Rust
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    # Ruby
+    ".rubocop.yml",
+    ".rubocop.yaml",
+    # Java / Kotlin
+    "checkstyle.xml",
+    ".checkstyle.xml",
+    ".scalafmt.conf",
+    # Swift
+    ".swiftlint.yml",
+    ".swiftlint.yaml",
+    # PHP
+    ".php-cs-fixer.php",
+    ".php-cs-fixer.dist.php",
+    "phpcs.xml",
+    "phpcs.xml.dist",
+    "phpstan.neon",
+    "phpstan.neon.dist",
+    # C/C++
+    ".clang-format",
+    ".clang-tidy",
+    # General
+    ".stylelintrc",
+    ".stylelintrc.json",
+    ".stylelintrc.yml",
+    ".stylelintrc.yaml",
+    ".markdownlint.json",
+    ".markdownlint.yml",
+    ".markdownlint.yaml",
+]
+
+LINTER_CONFIG_MAX_PER_FILE = 3000
+LINTER_CONFIG_MAX_TOTAL = 12_000
+
 GUIDELINES_PATHS = [
     ".github/claude-review.md",
     ".claude-review.md",
@@ -391,6 +471,30 @@ def get_review_guidelines(owner: str, repo: str, ref: str, token: str, tree_path
                 return content[:GUIDELINES_MAX_CHARS] + "\n... (truncated)"
             return content
     return ""
+
+
+def get_linter_config(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
+    """Fetch linter and formatter configuration files from the repo."""
+    blocks: list[str] = []
+    total_chars = 0
+
+    for path in LINTER_CONFIG_FILES:
+        if tree_paths is not None and path not in tree_paths:
+            continue
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+        truncated = content[:LINTER_CONFIG_MAX_PER_FILE]
+        if len(content) > LINTER_CONFIG_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+        block = f"### {path}\n```\n{truncated}\n```"
+        if total_chars + len(block) > LINTER_CONFIG_MAX_TOTAL:
+            break
+        blocks.append(block)
+        total_chars += len(block)
+        print(f"  linter config: included {path} ({len(content)} chars)", file=sys.stderr)
+
+    return "\n\n".join(blocks)
 
 
 RELATED_BUILD_FILES = [
@@ -911,6 +1015,8 @@ REVIEW_PROMPT = textwrap.dedent("""\
 
     {guidelines_section}
 
+    {linter_config_section}
+
     {repo_tree_section}
 
     ## Response schema
@@ -946,6 +1052,12 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - Use the repository context (language versions, dependencies, config) to
       calibrate your review. Do not suggest patterns or syntax incompatible with
       the project's declared runtime, frameworks, or dependencies.
+    - If linter/formatter configurations are provided, every "suggestion" you
+      produce MUST comply with those rules. For example: respect the configured
+      max line length, quoting style, indentation (tabs vs spaces and width),
+      trailing commas, import ordering, naming conventions, and any other rules
+      defined in the config files. A suggestion that would cause a linter error
+      is worse than no suggestion at all.
     - If repository guidelines are provided, follow them. They take precedence
       over your default review preferences.
     - If a repository structure listing is provided, use it to understand the
@@ -1099,16 +1211,23 @@ def fetch_shared_context(
     repo_tree: str = "",
     tree_paths: set[str] | None = None,
 ) -> dict[str, str]:
-    """Fetch repo context, docs, guidelines, and tree formatting — shared across all review batches."""
+    """Fetch repo context, docs, guidelines, linter config, and tree formatting — shared across all review batches."""
     repo_context = get_repo_context(owner, repo, head_sha, token, tree_paths)
     repo_docs = get_repo_docs(owner, repo, head_sha, token, tree_paths)
     guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
+    linter_config = get_linter_config(owner, repo, head_sha, token, tree_paths)
 
     return {
         "repo_context_section": f"## Repository context\n\n{repo_context}" if repo_context else "",
         "repo_docs_section": f"## Project documentation\n\n{repo_docs}" if repo_docs else "",
         "guidelines_section": f"## Repository guidelines\n\n{guidelines}" if guidelines else "",
         "guidelines_raw": guidelines,
+        "linter_config_section": (
+            "## Linter and formatter configuration\n\n"
+            "The following linter/formatter configs are active in this project. "
+            "All suggested code changes MUST comply with these rules.\n\n"
+            f"{linter_config}"
+        ) if linter_config else "",
         "repo_tree_section": f"## Repository structure\n\n```\n{repo_tree}\n```" if repo_tree else "",
     }
 
@@ -1194,6 +1313,14 @@ def build_prompt(
     guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
     guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
 
+    linter_config = get_linter_config(owner, repo, head_sha, token, tree_paths)
+    linter_config_section = (
+        "## Linter and formatter configuration\n\n"
+        "The following linter/formatter configs are active in this project. "
+        "All suggested code changes MUST comply with these rules.\n\n"
+        f"{linter_config}"
+    ) if linter_config else ""
+
     repo_tree_section = f"## Repository structure\n\n```\n{repo_tree}\n```" if repo_tree else ""
 
     fetched_paths: set[str] = set()
@@ -1232,6 +1359,7 @@ def build_prompt(
         repo_context_section=repo_context_section,
         repo_docs_section=repo_docs_section,
         guidelines_section=guidelines_section,
+        linter_config_section=linter_config_section,
         repo_tree_section=repo_tree_section,
         sibling_section=sibling_section,
         import_section=import_section,
@@ -1522,9 +1650,15 @@ RETRY_PROMPT = textwrap.dedent("""\
     Only comment on ADDED (+) lines. If you still genuinely find nothing after
     careful re-examination, return {{"comments": []}}.
 
+    If you produce any "suggestion" fields, they MUST comply with the project's
+    linter/formatter rules (if provided below). A suggestion that introduces a
+    linter violation is worse than no suggestion.
+
     ## Pull Request
     **Title:** {title}
     **Description:** {description}
+
+    {linter_config_section}
 
     {related_context_section}
 
@@ -1540,6 +1674,7 @@ def build_retry_prompt(
     pr_info: dict,
     files: list[dict],
     related_context: str = "",
+    linter_config_section: str = "",
 ) -> str:
     """Build a shorter, diff-only prompt for the second-pass review."""
     diffs: list[str] = []
@@ -1566,6 +1701,7 @@ def build_retry_prompt(
         num_files=len([f for f in files if f.get("status") != "removed"]),
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
+        linter_config_section=linter_config_section,
         related_context_section=related_context_section,
         diffs_text=diffs_text,
     )
@@ -1600,6 +1736,8 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     {repo_docs_section}
 
     {guidelines_section}
+
+    {linter_config_section}
 
     {repo_tree_section}
 
@@ -1636,6 +1774,12 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     - Use the repository context (language versions, dependencies, config) to
       calibrate your review. Do not suggest patterns or syntax incompatible with
       the project's declared runtime, frameworks, or dependencies.
+    - If linter/formatter configurations are provided, every "suggestion" you
+      produce MUST comply with those rules. For example: respect the configured
+      max line length, quoting style, indentation (tabs vs spaces and width),
+      trailing commas, import ordering, naming conventions, and any other rules
+      defined in the config files. A suggestion that would cause a linter error
+      is worse than no suggestion at all.
     - If repository guidelines are provided, follow them. They take precedence
       over your default review preferences.
     - If a repository structure listing is provided, use it to understand the
@@ -1773,6 +1917,8 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
 
     {guidelines_section}
 
+    {linter_config_section}
+
     ## Batch review results
 
     {batch_results_text}
@@ -1810,6 +1956,9 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
     - Only comment on lines that appear as ADDED (+) in each file's DIFF.
     - "suggestion" must be the exact replacement code for GitHub suggested changes.
       Multi-line suggestions are fine (separate lines with \\n).
+    - If linter/formatter configurations are provided, every "suggestion" you
+      produce MUST comply with those rules. Discard or fix any batch suggestions
+      that would violate the project's linter config.
     - Keep every comment from the batch reviews UNLESS it is a clear duplicate or
       demonstrably incorrect given cross-file context. When in doubt, keep it.
     - Preserve the original severity, message, and suggestion of kept comments.
@@ -1994,6 +2143,7 @@ def build_batch_prompt(
         repo_context_section=shared_context["repo_context_section"],
         repo_docs_section=shared_context["repo_docs_section"],
         guidelines_section=shared_context["guidelines_section"],
+        linter_config_section=shared_context.get("linter_config_section", ""),
         repo_tree_section=shared_context["repo_tree_section"],
         sibling_section=sibling_section,
         import_section=import_section,
@@ -2007,6 +2157,7 @@ def build_reduce_prompt(
     files: list[dict],
     batch_results: list[dict],
     guidelines: str = "",
+    linter_config_section: str = "",
 ) -> str:
     """Build the reduce-phase prompt from batch results and all file diffs."""
     max_results_chars = 80_000
@@ -2081,6 +2232,7 @@ def build_reduce_prompt(
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
         guidelines_section=guidelines_section,
+        linter_config_section=linter_config_section,
         batch_results_text=batch_results_text,
         all_diffs_text=all_diffs_text,
     )
@@ -2202,6 +2354,7 @@ def _review_map_reduce_inner(
     print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)
     reduce_prompt = build_reduce_prompt(
         pr_info, files, batch_results, shared_context.get("guidelines_raw", ""),
+        linter_config_section=shared_context.get("linter_config_section", ""),
     )
     reduce_text = call_claude(reduce_prompt, api_url, api_token)
     reduce_result = parse_response(reduce_text)
@@ -2382,7 +2535,14 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
-                retry_prompt = build_retry_prompt(pr_info, files, retry_related)
+                retry_linter_config = get_linter_config(owner, repo, head_sha, github_token, tree_paths)
+                retry_linter_section = (
+                    "## Linter and formatter configuration\n\n"
+                    "The following linter/formatter configs are active in this project. "
+                    "All suggested code changes MUST comply with these rules.\n\n"
+                    f"{retry_linter_config}"
+                ) if retry_linter_config else ""
+                retry_prompt = build_retry_prompt(pr_info, files, retry_related, retry_linter_section)
                 retry_text = call_claude(retry_prompt, api_url, api_token)
                 retry_response = parse_response(retry_text)
                 if retry_response:

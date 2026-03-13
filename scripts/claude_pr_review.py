@@ -529,17 +529,18 @@ def _build_indented_tree(file_paths: list[str]) -> str:
 def get_repo_tree(
     owner: str, repo: str, sha: str, token: str,
     changed_files: list[dict] | None = None,
-) -> tuple[str, set[str]]:
+) -> tuple[str, set[str] | None]:
     """Fetch the full repository tree via Git Trees API.
 
     Returns (formatted_listing, set_of_all_file_paths).
+    On failure returns ("", None) so callers fall back to non-tree behavior.
     When the full tree exceeds the budget, prioritizes subtrees around changed files.
     """
     url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{sha}"
     try:
         data = github_get(url, token, params={"recursive": "1"})
     except RuntimeError:
-        return "", set()
+        return "", None
 
     tree = data.get("tree", [])
     all_paths: set[str] = set()
@@ -573,13 +574,10 @@ def get_repo_tree(
         listing = _build_indented_tree(priority_paths)
         if len(listing) < REPO_TREE_MAX_CHARS and other_paths:
             remaining = REPO_TREE_MAX_CHARS - len(listing) - 50
-            other_listing = _build_indented_tree(other_paths)
-            if len(other_listing) <= remaining:
-                listing = _build_indented_tree(display_paths)
-            else:
-                listing += "\n\n# Other directories (summarized)\n"
-                top_dirs = sorted({p.split("/")[0] for p in other_paths if "/" in p})
-                listing += "\n".join(d + "/" for d in top_dirs)
+            top_dirs = sorted({p.split("/")[0] for p in other_paths if "/" in p})
+            summary = "\n\n# Other directories (summarized)\n" + "\n".join(d + "/" for d in top_dirs)
+            if len(summary) <= remaining:
+                listing += summary
 
         if len(listing) > REPO_TREE_MAX_CHARS:
             listing = listing[:REPO_TREE_MAX_CHARS] + "\n... (truncated)"
@@ -743,12 +741,15 @@ def _resolve_import(raw_import: str, source_file: str, tree_paths: set[str], ext
             rel = os.path.join(rel, rest.replace(".", "/"))
         candidate = os.path.normpath(os.path.join(source_dir, rel))
 
-        py_path = candidate + ".py"
-        if py_path in tree_paths:
-            return py_path
+        if rest:
+            py_path = candidate + ".py"
+            if py_path in tree_paths:
+                return py_path
         init_path = os.path.join(candidate, "__init__.py")
         if init_path in tree_paths:
             return init_path
+        if rest:
+            return None
     else:
         candidate = os.path.normpath(os.path.join(source_dir, raw_import))
         if candidate in tree_paths:

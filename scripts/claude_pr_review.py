@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import textwrap
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -220,7 +221,7 @@ def get_changed_files(owner: str, repo: str, pr_number: int, token: str) -> list
     return files
 
 
-def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> str:
+def _fetch_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> str:
     url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{path}"
     try:
         data = github_get(url, token, params={"ref": ref})
@@ -229,6 +230,40 @@ def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> 
     if isinstance(data, dict) and data.get("encoding") == "base64":
         return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
     return ""
+
+
+_file_content_cache: dict[str, str] | None = None
+_file_content_lock = threading.Lock()
+
+
+def _enable_file_content_cache() -> None:
+    """Enable a thread-safe in-memory cache for get_file_content (used during map-reduce)."""
+    global _file_content_cache
+    _file_content_cache = {}
+
+
+def _disable_file_content_cache() -> None:
+    """Disable and clear the file content cache."""
+    global _file_content_cache
+    _file_content_cache = None
+
+
+def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> str:
+    """Fetch file content, using thread-safe cache when enabled (map-reduce mode)."""
+    if _file_content_cache is None:
+        return _fetch_file_content(owner, repo, ref, path, token)
+
+    cache_key = f"{owner}/{repo}/{ref}/{path}"
+    with _file_content_lock:
+        if cache_key in _file_content_cache:
+            return _file_content_cache[cache_key]
+
+    content = _fetch_file_content(owner, repo, ref, path, token)
+
+    with _file_content_lock:
+        _file_content_cache[cache_key] = content
+
+    return content
 
 
 REPO_CONTEXT_FILES = [
@@ -1818,7 +1853,6 @@ def build_batch_prompt(
     head_sha: str,
     token: str,
     shared_context: dict[str, str],
-    repo_tree: str,
     tree_paths: set[str] | None,
 ) -> str:
     """Build a review prompt for a single batch of files."""
@@ -1848,9 +1882,12 @@ def build_batch_prompt(
         if changes > 800:
             if patch:
                 block = _build_diff_only_block(path, status, patch)
-                included_files.append(block)
-                total_chars += len(block)
-                print(f"    [batch {batch_num}] {path}: diff only ({changes} changes)", file=sys.stderr)
+                if total_chars + len(block) <= max_chars:
+                    included_files.append(block)
+                    total_chars += len(block)
+                    print(f"    [batch {batch_num}] {path}: diff only ({changes} changes)", file=sys.stderr)
+                else:
+                    print(f"    [batch {batch_num}] {path}: skipped ({changes} changes, exceeded budget)", file=sys.stderr)
                 continue
             print(f"    [batch {batch_num}] {path}: skipped ({changes} changes, no patch)", file=sys.stderr)
             continue
@@ -1859,9 +1896,12 @@ def build_batch_prompt(
         if not content:
             if patch:
                 block = _build_diff_only_block(path, status, patch)
-                included_files.append(block)
-                total_chars += len(block)
-                print(f"    [batch {batch_num}] {path}: diff only (could not fetch content)", file=sys.stderr)
+                if total_chars + len(block) <= max_chars:
+                    included_files.append(block)
+                    total_chars += len(block)
+                    print(f"    [batch {batch_num}] {path}: diff only (could not fetch content)", file=sys.stderr)
+                else:
+                    print(f"    [batch {batch_num}] {path}: skipped (exceeded budget)", file=sys.stderr)
                 continue
             continue
 
@@ -1946,7 +1986,9 @@ def build_reduce_prompt(
     guidelines: str = "",
 ) -> str:
     """Build the reduce-phase prompt from batch results and all file diffs."""
+    max_results_chars = 80_000
     results_parts: list[str] = []
+    results_chars = 0
     for i, result in enumerate(batch_results, 1):
         summary = result.get("summary", {})
         comments = result.get("comments", [])
@@ -1961,9 +2003,22 @@ def build_reduce_prompt(
                 f"- `{fd.get('path', '')}`: {fd.get('description', '')}"
                 for fd in files_desc
             ) + "\n"
+        comments_json = json.dumps(comments, indent=2)
+        if results_chars + len(part) + len(comments_json) > max_results_chars:
+            comments_json = json.dumps(
+                [{"path": c.get("path"), "line": c.get("line"),
+                  "severity": c.get("severity"), "message": c.get("message")}
+                 for c in comments if isinstance(c, dict)],
+            )
         part += f"\n### Batch {i} comments ({len(comments)} total)\n"
-        part += "```json\n" + json.dumps(comments, indent=2) + "\n```\n"
+        part += "```json\n" + comments_json + "\n```\n"
+        if results_chars + len(part) > max_results_chars:
+            results_parts.append(
+                f"... (batch {i}–{len(batch_results)} truncated to fit budget)\n"
+            )
+            break
         results_parts.append(part)
+        results_chars += len(part)
 
     batch_results_text = "\n".join(results_parts) if results_parts else "(No batch results.)"
 
@@ -2020,8 +2075,35 @@ def review_map_reduce(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None = None,
-) -> tuple[dict, list[dict]]:
-    """Run a map-reduce review: parallel batch reviews followed by a consolidation pass."""
+) -> tuple[dict, list[dict], int, int]:
+    """Run a map-reduce review: parallel batch reviews followed by a consolidation pass.
+
+    Returns (summary, comments, total_batches, failed_batches).
+    """
+    _enable_file_content_cache()
+
+    try:
+        return _review_map_reduce_inner(
+            pr_info, files, owner, repo, head_sha, github_token,
+            api_url, api_token, repo_tree, tree_paths, batches,
+        )
+    finally:
+        _disable_file_content_cache()
+
+
+def _review_map_reduce_inner(
+    pr_info: dict,
+    files: list[dict],
+    owner: str,
+    repo: str,
+    head_sha: str,
+    github_token: str,
+    api_url: str,
+    api_token: str,
+    repo_tree: str,
+    tree_paths: set[str] | None,
+    batches: list[list[dict]] | None,
+) -> tuple[dict, list[dict], int, int]:
     shared_context = fetch_shared_context(
         owner, repo, head_sha, github_token, repo_tree, tree_paths,
     )
@@ -2029,6 +2111,10 @@ def review_map_reduce(
     if batches is None:
         batches = group_files_into_batches(files)
     total_batches = len(batches)
+    if total_batches == 0:
+        print("  Map-reduce: 0 batches (deletions-only PR) — nothing to review.", file=sys.stderr)
+        return {}, [], 0, 0
+
     print(f"  Map-reduce: {total_batches} batch(es).", file=sys.stderr)
 
     def _run_batch(batch_idx: int, batch_files: list[dict]) -> dict:
@@ -2039,7 +2125,7 @@ def review_map_reduce(
         prompt = build_batch_prompt(
             pr_info, batch_files, files, num, total_batches,
             owner, repo, head_sha, github_token,
-            shared_context, repo_tree, tree_paths,
+            shared_context, tree_paths,
         )
         text = call_claude(prompt, api_url, api_token)
         result = parse_response(text)
@@ -2099,17 +2185,30 @@ def review_map_reduce(
 
     if not reduce_result:
         print("  Reduce phase failed — falling back to raw batch results.", file=sys.stderr)
-        combined_summary = batch_results[0].get("summary", {})
+        all_changes: list[str] = []
+        all_file_descs: list[dict] = []
+        overviews: list[str] = []
+        for r in batch_results:
+            s = r.get("summary", {})
+            if s.get("overview"):
+                overviews.append(s["overview"])
+            all_changes.extend(s.get("changes", []))
+            all_file_descs.extend(s.get("files", []))
+        combined_summary = {
+            "overview": " ".join(overviews) if overviews else "",
+            "changes": all_changes,
+            "files": all_file_descs,
+        }
         combined_comments: list[dict] = []
         for r in batch_results:
             combined_comments.extend(r.get("comments", []))
-        return combined_summary, combined_comments
+        return combined_summary, combined_comments, total_batches, failed_batches
 
     summary = reduce_result.get("summary", {})
     comments = reduce_result.get("comments", [])
     print(f"  Reduce phase complete: {len(comments)} final comment(s).", file=sys.stderr)
 
-    return summary, comments
+    return summary, comments, total_batches, failed_batches
 
 
 # ---------------------------------------------------------------------------
@@ -2188,12 +2287,15 @@ def main() -> None:
                 f"{total_changes} changes, {num_batches} batches)...",
                 file=sys.stderr,
             )
-            summary, all_returned = review_map_reduce(
+            summary, all_returned, _total_b, failed_b = review_map_reduce(
                 pr_info, files, owner, repo, head_sha, github_token,
                 api_url, api_token, repo_tree, tree_paths,
                 batches=batches,
             )
-            review_mode = f"Map-reduce review ({num_batches} batches)"
+            if failed_b:
+                review_mode = f"Map-reduce review ({num_batches} batches, {failed_b} failed)"
+            else:
+                review_mode = f"Map-reduce review ({num_batches} batches)"
         else:
             prompt = build_prompt(
                 pr_info, files, owner, repo, head_sha, github_token,
@@ -2265,7 +2367,15 @@ def main() -> None:
 
         summary_body = format_summary_comment(summary, comments, model_name, review_mode)
         post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)
-        set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
+
+        if use_map_reduce and failed_b:
+            set_commit_status(
+                owner, repo, head_sha, "success",
+                f"Review complete (partial — {failed_b}/{num_batches} batches failed)",
+                github_token,
+            )
+        else:
+            set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
 
         print("Done.", file=sys.stderr)
 

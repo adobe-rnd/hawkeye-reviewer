@@ -7,7 +7,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 - **Automatic reviews** on every PR (opened, reopened, ready for review)
 - **On-demand reviews** via `/claude-review` comment for re-reviewing after new commits
 - **Large PR support** — handles 1000+ line PRs with diff-only fallback for oversized files
-- **Repository-aware** — auto-detects language versions, dependencies, and frameworks from config files to avoid false positives
+- **Full repository awareness** — fetches the directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs — not just the diff
 - **Custom guidelines** — optional `.github/claude-review.md` for repo-specific review instructions
 - **Inline code suggestions** with GitHub's native suggestion blocks (one-click apply)
 - **5 severity levels** — critical, warning, suggestion, design, nitpick — each with distinct icons
@@ -125,6 +125,24 @@ The reviewer automatically fetches config files from your repo to understand the
 | `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` | Project documentation |
 | `CLAUDE.md`, `.cursorrules`, `.cursor/rules/review.md`, `.cursor/rules/code-style.md` | AI coding conventions |
 | `.github/CODEOWNERS`, `.github/pull_request_template.md` | GitHub conventions |
+
+### Repository structure
+
+The reviewer fetches the full directory tree (via the Git Trees API — a single API call) so Claude can see the entire project layout. This enables feedback like:
+
+- "Your other services in `src/services/` use snake_case — this new file should too"
+- "This file belongs in `src/utils/`, not `src/helpers/` based on your existing structure"
+- "You already have a `BaseRepository` class — this new repository should extend it"
+
+Noisy directories (`node_modules`, `__pycache__`, `dist`, `build`, `.git`, etc.) are automatically excluded.
+
+### Sibling files
+
+For each directory containing changed files, the reviewer fetches up to 3 existing source files with the same extension. This lets Claude compare the PR's code against established patterns in the same directory — class structure, error handling, naming conventions, and architectural patterns.
+
+### Import resolution
+
+The reviewer parses `import` / `from ... import` / `require()` statements in the changed files and fetches the referenced local modules. This lets Claude verify that the changed code uses internal APIs correctly — right parameter types, proper return value handling, and interface compliance.
 
 ## Custom review guidelines
 

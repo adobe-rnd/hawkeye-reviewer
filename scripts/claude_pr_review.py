@@ -290,12 +290,14 @@ GUIDELINES_PATHS = [
 GUIDELINES_MAX_CHARS = 4000
 
 
-def get_repo_context(owner: str, repo: str, ref: str, token: str) -> str:
+def get_repo_context(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
     """Fetch well-known config files from the repo to give Claude project context."""
     blocks: list[str] = []
     total_chars = 0
 
     for path in REPO_CONTEXT_FILES:
+        if tree_paths is not None and path not in tree_paths:
+            continue
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
@@ -312,12 +314,14 @@ def get_repo_context(owner: str, repo: str, ref: str, token: str) -> str:
     return "\n\n".join(blocks)
 
 
-def get_repo_docs(owner: str, repo: str, ref: str, token: str) -> str:
+def get_repo_docs(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
     """Fetch project documentation and convention files for additional review context."""
     blocks: list[str] = []
     total_chars = 0
 
     for path in REPO_DOCS_FILES:
+        if tree_paths is not None and path not in tree_paths:
+            continue
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
@@ -334,9 +338,11 @@ def get_repo_docs(owner: str, repo: str, ref: str, token: str) -> str:
     return "\n\n".join(blocks)
 
 
-def get_review_guidelines(owner: str, repo: str, ref: str, token: str) -> str:
+def get_review_guidelines(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
     """Fetch optional review guidelines from the repo."""
     for path in GUIDELINES_PATHS:
+        if tree_paths is not None and path not in tree_paths:
+            continue
         content = get_file_content(owner, repo, ref, path, token)
         if content:
             print(f"  review guidelines: loaded from {path}", file=sys.stderr)
@@ -427,6 +433,8 @@ def get_related_context(
     repo: str,
     ref: str,
     token: str,
+    tree_paths: set[str] | None = None,
+    fetched_paths: set[str] | None = None,
 ) -> str:
     """Fetch test files and build configs related to the changed files."""
     blocks: list[str] = []
@@ -434,8 +442,7 @@ def get_related_context(
     fetched: set[str] = set()
     changed_paths = {f["filename"] for f in changed_files}
 
-    # Collect all candidate paths (test files + build configs)
-    candidates: list[tuple[str, str]] = []  # (path, reason)
+    candidates: list[tuple[str, str]] = []
 
     for f in changed_files:
         for tp in _infer_test_paths(f["filename"]):
@@ -449,10 +456,16 @@ def get_related_context(
     for path, reason in candidates:
         if path in fetched or total_chars >= RELATED_CONTEXT_MAX_TOTAL:
             continue
+        if tree_paths is not None and path not in tree_paths:
+            continue
+        if fetched_paths is not None and path in fetched_paths:
+            continue
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
         fetched.add(path)
+        if fetched_paths is not None:
+            fetched_paths.add(path)
         truncated = content[:RELATED_CONTEXT_MAX_PER_FILE]
         if len(content) > RELATED_CONTEXT_MAX_PER_FILE:
             truncated += "\n... (truncated)"
@@ -462,6 +475,358 @@ def get_related_context(
         blocks.append(block)
         total_chars += len(block)
         print(f"  related context: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
+
+    return "\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
+# Repository structure (directory tree)
+# ---------------------------------------------------------------------------
+
+REPO_TREE_MAX_CHARS = 8_000
+
+SKIP_TREE_DIRS = {
+    "node_modules", "__pycache__", ".git", ".svn", ".hg",
+    "dist", "build", "out", ".next", ".nuxt", ".output",
+    "coverage", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    "vendor", ".gradle", "target", ".idea", ".vscode",
+    ".DS_Store", ".cache", ".parcel-cache", ".turbo", ".vercel",
+    "eggs", ".eggs", "__snapshots__", ".terraform",
+}
+
+SOURCE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts",
+    ".java", ".kt", ".kts", ".scala", ".go", ".rs",
+    ".rb", ".php", ".cs", ".swift", ".c", ".cpp", ".h", ".hpp",
+    ".vue", ".svelte", ".astro",
+}
+
+
+def _build_indented_tree(file_paths: list[str]) -> str:
+    """Render file paths as an indented directory tree (more compact than flat listing)."""
+    root: dict = {}
+    for path in sorted(file_paths):
+        parts = path.split("/")
+        node = root
+        for i, part in enumerate(parts):
+            key = part + "/" if i < len(parts) - 1 else part
+            if key not in node:
+                node[key] = {}
+            node = node[key]
+
+    lines: list[str] = []
+
+    def _render(node: dict, depth: int) -> None:
+        for name in sorted(node.keys(), key=lambda n: (not n.endswith("/"), n)):
+            lines.append("  " * depth + name)
+            if node[name]:
+                _render(node[name], depth + 1)
+
+    _render(root, 0)
+    return "\n".join(lines)
+
+
+def get_repo_tree(
+    owner: str, repo: str, sha: str, token: str,
+    changed_files: list[dict] | None = None,
+) -> tuple[str, set[str] | None]:
+    """Fetch the full repository tree via Git Trees API.
+
+    Returns (formatted_listing, set_of_all_file_paths).
+    On failure returns ("", None) so callers fall back to non-tree behavior.
+    When the full tree exceeds the budget, prioritizes subtrees around changed files.
+    """
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{sha}"
+    try:
+        data = github_get(url, token, params={"recursive": "1"})
+    except RuntimeError:
+        return "", None
+
+    tree = data.get("tree", [])
+    truncated = data.get("truncated", False)
+    all_paths: set[str] = set()
+    display_paths: list[str] = []
+
+    for item in tree:
+        path = item.get("path", "")
+        parts = path.split("/")
+        if any(p in SKIP_TREE_DIRS for p in parts):
+            continue
+        if item.get("type") == "blob":
+            all_paths.add(path)
+            display_paths.append(path)
+
+    if changed_files:
+        priority_dirs: set[str] = set()
+        for f in changed_files:
+            path = f.get("filename", "")
+            parts = path.split("/")
+            for i in range(len(parts)):
+                priority_dirs.add("/".join(parts[:i]))
+
+        priority_set = set()
+        priority_paths: list[str] = []
+        for p in display_paths:
+            if os.path.dirname(p) in priority_dirs:
+                priority_paths.append(p)
+                priority_set.add(p)
+                continue
+            for d in priority_dirs:
+                if p == d or p.startswith(d + "/"):
+                    priority_paths.append(p)
+                    priority_set.add(p)
+                    break
+
+        listing = _build_indented_tree(priority_paths)
+        other_paths = [p for p in display_paths if p not in priority_set]
+        if len(listing) < REPO_TREE_MAX_CHARS and other_paths:
+            remaining = REPO_TREE_MAX_CHARS - len(listing) - 50
+            top_dirs = sorted({p.split("/")[0] for p in other_paths if "/" in p})
+            summary = "\n\n# Other directories (summarized)\n" + "\n".join(d + "/" for d in top_dirs)
+            if len(summary) <= remaining:
+                listing += summary
+    else:
+        listing = _build_indented_tree(display_paths)
+
+    if len(listing) > REPO_TREE_MAX_CHARS:
+        listing = listing[:REPO_TREE_MAX_CHARS] + "\n... (truncated)"
+
+    if truncated:
+        print(f"  repo tree: {len(all_paths)} files (TRUNCATED by GitHub — not using for existence checks)", file=sys.stderr)
+        return listing, None
+
+    print(f"  repo tree: {len(all_paths)} files in tree", file=sys.stderr)
+    return listing, all_paths
+
+
+# ---------------------------------------------------------------------------
+# Sibling files (pattern / convention consistency)
+# ---------------------------------------------------------------------------
+
+SIBLING_MAX_PER_FILE = 3_000
+SIBLING_MAX_TOTAL = 25_000
+SIBLING_MAX_PER_DIR = 3
+SIBLING_MAX_FILES = 8
+
+
+def _sibling_relevance(candidate: str, changed_names: list[set[str]]) -> float:
+    """Score a candidate sibling by name-similarity to the changed files (higher = more relevant)."""
+    base = os.path.basename(candidate)
+    name = os.path.splitext(base)[0].lower()
+
+    if name in ("__init__", "index", "mod", "lib", "__all__"):
+        return 0.1
+
+    cand_words = set(re.split(r"[_\-.]", name)) - {""}
+    if not cand_words:
+        return 0.5
+
+    best = 0.0
+    for changed_words in changed_names:
+        if not changed_words:
+            continue
+        intersection = cand_words & changed_words
+        union = cand_words | changed_words
+        best = max(best, len(intersection) / len(union))
+
+    return best + 0.5
+
+
+def get_sibling_files(
+    changed_files: list[dict],
+    tree_paths: set[str],
+    owner: str,
+    repo: str,
+    ref: str,
+    token: str,
+    fetched_paths: set[str] | None = None,
+) -> str:
+    """Fetch source files in the same directories as changed files for pattern comparison."""
+    changed_set = {f["filename"] for f in changed_files}
+
+    dir_exts: dict[str, set[str]] = {}
+    for f in changed_files:
+        if f.get("status") == "removed":
+            continue
+        path = f["filename"]
+        dirpart = os.path.dirname(path)
+        _, ext = os.path.splitext(path)
+        if ext in SOURCE_EXTENSIONS:
+            dir_exts.setdefault(dirpart, set()).add(ext)
+
+    if not dir_exts:
+        return ""
+
+    changed_names = [
+        set(re.split(r"[_\-.]", os.path.splitext(os.path.basename(f["filename"]))[0].lower())) - {""}
+        for f in changed_files
+    ]
+
+    candidates: list[tuple[str, str, float]] = []
+    for tree_path in tree_paths:
+        dirpart = os.path.dirname(tree_path)
+        _, ext = os.path.splitext(tree_path)
+        if dirpart in dir_exts and ext in dir_exts[dirpart] and tree_path not in changed_set:
+            score = _sibling_relevance(tree_path, changed_names)
+            candidates.append((tree_path, dirpart, score))
+
+    candidates.sort(key=lambda x: (-x[2], x[0]))
+
+    blocks: list[str] = []
+    total_chars = 0
+    dir_counts: dict[str, int] = {}
+    total_files = 0
+
+    for path, dirpart, _score in candidates:
+        if total_files >= SIBLING_MAX_FILES or total_chars >= SIBLING_MAX_TOTAL:
+            break
+        if dir_counts.get(dirpart, 0) >= SIBLING_MAX_PER_DIR:
+            continue
+        if fetched_paths is not None and path in fetched_paths:
+            continue
+
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+
+        truncated = content[:SIBLING_MAX_PER_FILE]
+        if len(content) > SIBLING_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+
+        block = f"### {path}\n```\n{truncated}\n```"
+        if total_chars + len(block) > SIBLING_MAX_TOTAL:
+            break
+
+        blocks.append(block)
+        total_chars += len(block)
+        dir_counts[dirpart] = dir_counts.get(dirpart, 0) + 1
+        total_files += 1
+        if fetched_paths is not None:
+            fetched_paths.add(path)
+        print(f"  sibling: included {path} ({len(content)} chars)", file=sys.stderr)
+
+    return "\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
+# Import resolution (local dependencies of changed files)
+# ---------------------------------------------------------------------------
+
+IMPORT_MAX_PER_FILE = 3_000
+IMPORT_MAX_TOTAL = 20_000
+IMPORT_MAX_FILES = 10
+
+
+def _parse_local_imports(content: str, filepath: str) -> list[str]:
+    """Extract relative / local import paths from source code."""
+    ext = os.path.splitext(filepath)[1]
+    raw_paths: list[str] = []
+
+    if ext == ".py":
+        for m in re.finditer(r"^\s*from\s+(\.[\w.]*)\s+import\b", content, re.MULTILINE):
+            raw_paths.append(m.group(1))
+
+    elif ext in (".js", ".jsx", ".ts", ".tsx", ".mjs", ".mts", ".vue", ".svelte"):
+        for m in re.finditer(
+            r"""(?:import\s+.*?\s+from\s+|import\s+|require\s*\(\s*)['"](\.[^'"]+)['"]""",
+            content,
+        ):
+            raw_paths.append(m.group(1))
+
+    return raw_paths
+
+
+def _resolve_import(raw_import: str, source_file: str, tree_paths: set[str], ext: str) -> str | None:
+    """Resolve a raw import path to an actual repo file path, or None."""
+    source_dir = os.path.dirname(source_file)
+
+    if ext == ".py":
+        dots = 0
+        rest = raw_import
+        while rest.startswith("."):
+            dots += 1
+            rest = rest[1:]
+        rel = "/".join([".."] * (dots - 1)) if dots > 1 else "."
+        if rest:
+            rel = os.path.join(rel, rest.replace(".", "/"))
+        candidate = os.path.normpath(os.path.join(source_dir, rel))
+
+        if rest:
+            py_path = candidate + ".py"
+            if py_path in tree_paths:
+                return py_path
+        init_path = os.path.join(candidate, "__init__.py")
+        if init_path in tree_paths:
+            return init_path
+        if rest:
+            return None
+    else:
+        candidate = os.path.normpath(os.path.join(source_dir, raw_import))
+        if candidate in tree_paths:
+            return candidate
+        for try_ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts", ".vue", ".svelte"):
+            full = candidate + try_ext
+            if full in tree_paths:
+                return full
+        for idx in ("index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.mts"):
+            full = os.path.join(candidate, idx)
+            if full in tree_paths:
+                return full
+
+    return None
+
+
+def get_imported_files(
+    file_contents: dict[str, str],
+    tree_paths: set[str],
+    changed_paths: set[str],
+    owner: str,
+    repo: str,
+    ref: str,
+    token: str,
+    fetched_paths: set[str] | None = None,
+) -> str:
+    """Parse imports from changed files and fetch the referenced local modules."""
+    resolved: dict[str, str] = {}
+
+    for source_path, content in file_contents.items():
+        ext = os.path.splitext(source_path)[1]
+        for raw in _parse_local_imports(content, source_path):
+            resolved_path = _resolve_import(raw, source_path, tree_paths, ext)
+            if resolved_path and resolved_path not in changed_paths and resolved_path not in resolved:
+                resolved[resolved_path] = f"imported by {source_path}"
+
+    if not resolved:
+        return ""
+
+    blocks: list[str] = []
+    total_chars = 0
+    total_files = 0
+
+    for path, reason in sorted(resolved.items()):
+        if total_files >= IMPORT_MAX_FILES or total_chars >= IMPORT_MAX_TOTAL:
+            break
+        if fetched_paths is not None and path in fetched_paths:
+            continue
+
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+
+        truncated = content[:IMPORT_MAX_PER_FILE]
+        if len(content) > IMPORT_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+
+        block = f"### {path}\n_Reason: {reason}_\n```\n{truncated}\n```"
+        if total_chars + len(block) > IMPORT_MAX_TOTAL:
+            break
+
+        blocks.append(block)
+        total_chars += len(block)
+        total_files += 1
+        if fetched_paths is not None:
+            fetched_paths.add(path)
+        print(f"  import: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
 
     return "\n\n".join(blocks)
 
@@ -505,6 +870,8 @@ REVIEW_PROMPT = textwrap.dedent("""\
 
     {guidelines_section}
 
+    {repo_tree_section}
+
     ## Response schema
 
     ```
@@ -540,6 +907,19 @@ REVIEW_PROMPT = textwrap.dedent("""\
       the project's declared runtime, frameworks, or dependencies.
     - If repository guidelines are provided, follow them. They take precedence
       over your default review preferences.
+    - If a repository structure listing is provided, use it to understand the
+      project layout. Flag changes that introduce naming or placement inconsistent
+      with the existing directory structure (e.g. a file in the wrong directory,
+      or named differently from its siblings).
+    - If sibling files are provided (existing files in the same directories as
+      the changed files), compare the changes against them for consistency in
+      patterns, error handling, naming conventions, and code structure. For
+      example, if all existing services use a particular base class, dependency
+      injection pattern, or error handling approach, a new service should follow
+      the same convention.
+    - If imported local modules are provided, verify that the changed code uses
+      their APIs correctly — right parameter types, proper handling of return
+      values, and compliance with type signatures or interfaces.
     - Be thorough and critical. A pull request with more than a handful of
       additions almost always has at least one issue worth flagging. It is better
       to surface a potential concern that turns out to be fine than to miss a real
@@ -644,6 +1024,10 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - Logging or debug statements (console.log, print, System.out) that appear
       to be leftover from development rather than intentional observability
 
+    {sibling_section}
+
+    {import_section}
+
     {related_context_section}
 
     ## Changed files
@@ -673,10 +1057,12 @@ def build_prompt(
     repo: str,
     head_sha: str,
     token: str,
-    related_context: str = "",
+    repo_tree: str = "",
+    tree_paths: set[str] | None = None,
 ) -> str:
     included_files: list[str] = []
     skipped_files: list[str] = []
+    file_contents: dict[str, str] = {}
     total_chars = 0
     max_chars = 180_000
 
@@ -712,6 +1098,8 @@ def build_prompt(
             skipped_files.append(f"{path} (could not fetch content)")
             continue
 
+        file_contents[path] = content
+
         block = _build_file_block(path, status, content, patch)
 
         if total_chars + len(block) > max_chars:
@@ -734,15 +1122,41 @@ def build_prompt(
 
     files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
 
-    repo_context = get_repo_context(owner, repo, head_sha, token)
+    repo_context = get_repo_context(owner, repo, head_sha, token, tree_paths)
     repo_context_section = f"## Repository context\n\n{repo_context}" if repo_context else ""
 
-    repo_docs = get_repo_docs(owner, repo, head_sha, token)
+    repo_docs = get_repo_docs(owner, repo, head_sha, token, tree_paths)
     repo_docs_section = f"## Project documentation\n\n{repo_docs}" if repo_docs else ""
 
-    guidelines = get_review_guidelines(owner, repo, head_sha, token)
+    guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
     guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
 
+    repo_tree_section = f"## Repository structure\n\n```\n{repo_tree}\n```" if repo_tree else ""
+
+    fetched_paths: set[str] = set()
+
+    sibling_context = ""
+    if tree_paths:
+        sibling_context = get_sibling_files(files, tree_paths, owner, repo, head_sha, token, fetched_paths)
+    sibling_section = (
+        "## Sibling files (same directories as changed files)\n\n"
+        "These files are NOT being changed but exist alongside the changed files. "
+        "Use them to verify the changes follow existing patterns and conventions.\n\n"
+        f"{sibling_context}"
+    ) if sibling_context else ""
+
+    import_context = ""
+    if tree_paths and file_contents:
+        changed_paths = {f["filename"] for f in files}
+        import_context = get_imported_files(file_contents, tree_paths, changed_paths, owner, repo, head_sha, token, fetched_paths)
+    import_section = (
+        "## Imported local modules (referenced by changed code)\n\n"
+        "These local project files are imported by the changed files. "
+        "Use them to verify correct API usage and interface compliance.\n\n"
+        f"{import_context}"
+    ) if import_context else ""
+
+    related_context = get_related_context(files, owner, repo, head_sha, token, tree_paths, fetched_paths)
     related_context_section = (
         f"## Related context files (not part of this PR)\n\n"
         f"These files are NOT being changed but may be affected by or relevant to the changes above.\n\n"
@@ -755,6 +1169,9 @@ def build_prompt(
         repo_context_section=repo_context_section,
         repo_docs_section=repo_docs_section,
         guidelines_section=guidelines_section,
+        repo_tree_section=repo_tree_section,
+        sibling_section=sibling_section,
+        import_section=import_section,
         related_context_section=related_context_section,
         files_text=files_text,
     )
@@ -1125,8 +1542,11 @@ def main() -> None:
         for f in files:
             valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
 
-        related_context = get_related_context(files, owner, repo, head_sha, github_token)
-        prompt = build_prompt(pr_info, files, owner, repo, head_sha, github_token, related_context)
+        repo_tree, tree_paths = get_repo_tree(owner, repo, head_sha, github_token, files)
+        prompt = build_prompt(
+            pr_info, files, owner, repo, head_sha, github_token,
+            repo_tree=repo_tree, tree_paths=tree_paths,
+        )
 
         print("  Calling Claude...", file=sys.stderr)
         claude_text = call_claude(prompt, api_url, api_token)
@@ -1170,7 +1590,8 @@ def main() -> None:
                 f"  Zero comments on {total_additions} additions — running second-pass review...",
                 file=sys.stderr,
             )
-            retry_prompt = build_retry_prompt(pr_info, files, related_context)
+            retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
+            retry_prompt = build_retry_prompt(pr_info, files, retry_related)
             retry_text = call_claude(retry_prompt, api_url, api_token)
             retry_response = parse_response(retry_text)
             if retry_response:

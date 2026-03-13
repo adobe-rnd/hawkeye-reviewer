@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "4eb8d3f692d83a1b2438b353f2ca4496514df953",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-13T16:09:20+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "cursor",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 441,
+    "total_deletions": 0,
+    "ai_additions": 441,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 19,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "10,129-146",
+      "human_lines": ""
+    },
+    "scripts/claude_pr_review.py": {
+      "ai_additions": 422,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "293,299-300,317,323-324,341,344-345,436-437,445,459-462,467-468,478-818,861-862,899-911,1016-1019,1049-1050,1054,1090-1091,1114,1117,1120,1123-1148,1161-1163,1534-1538,1582-1583",
+      "human_lines": ""
+    }
+  }
+}

@@ -489,7 +489,7 @@ SKIP_TREE_DIRS = {
     "node_modules", "__pycache__", ".git", ".svn", ".hg",
     "dist", "build", "out", ".next", ".nuxt", ".output",
     "coverage", ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
-    "vendor", ".gradle", "target", ".idea", ".vscode", ".cursor",
+    "vendor", ".gradle", "target", ".idea", ".vscode",
     ".DS_Store", ".cache", ".parcel-cache", ".turbo", ".vercel",
     "eggs", ".eggs", "__snapshots__", ".terraform",
 }
@@ -543,6 +543,7 @@ def get_repo_tree(
         return "", None
 
     tree = data.get("tree", [])
+    truncated = data.get("truncated", False)
     all_paths: set[str] = set()
     display_paths: list[str] = []
 
@@ -555,9 +556,7 @@ def get_repo_tree(
             all_paths.add(path)
             display_paths.append(path)
 
-    listing = _build_indented_tree(display_paths)
-
-    if len(listing) > REPO_TREE_MAX_CHARS and changed_files:
+    if changed_files:
         priority_dirs: set[str] = set()
         for f in changed_files:
             path = f.get("filename", "")
@@ -565,25 +564,36 @@ def get_repo_tree(
             for i in range(len(parts)):
                 priority_dirs.add("/".join(parts[:i]))
 
-        priority_paths = [p for p in display_paths if any(
-            p == d or p.startswith(d + "/") or os.path.dirname(p) in priority_dirs
-            for d in priority_dirs
-        )]
-        other_paths = [p for p in display_paths if p not in set(priority_paths)]
+        priority_set = set()
+        priority_paths: list[str] = []
+        for p in display_paths:
+            if os.path.dirname(p) in priority_dirs:
+                priority_paths.append(p)
+                priority_set.add(p)
+                continue
+            for d in priority_dirs:
+                if p == d or p.startswith(d + "/"):
+                    priority_paths.append(p)
+                    priority_set.add(p)
+                    break
 
         listing = _build_indented_tree(priority_paths)
+        other_paths = [p for p in display_paths if p not in priority_set]
         if len(listing) < REPO_TREE_MAX_CHARS and other_paths:
             remaining = REPO_TREE_MAX_CHARS - len(listing) - 50
             top_dirs = sorted({p.split("/")[0] for p in other_paths if "/" in p})
             summary = "\n\n# Other directories (summarized)\n" + "\n".join(d + "/" for d in top_dirs)
             if len(summary) <= remaining:
                 listing += summary
+    else:
+        listing = _build_indented_tree(display_paths)
 
-        if len(listing) > REPO_TREE_MAX_CHARS:
-            listing = listing[:REPO_TREE_MAX_CHARS] + "\n... (truncated)"
-
-    elif len(listing) > REPO_TREE_MAX_CHARS:
+    if len(listing) > REPO_TREE_MAX_CHARS:
         listing = listing[:REPO_TREE_MAX_CHARS] + "\n... (truncated)"
+
+    if truncated:
+        print(f"  repo tree: {len(all_paths)} files (TRUNCATED by GitHub — not using for existence checks)", file=sys.stderr)
+        return listing, None
 
     print(f"  repo tree: {len(all_paths)} files in tree", file=sys.stderr)
     return listing, all_paths
@@ -758,7 +768,7 @@ def _resolve_import(raw_import: str, source_file: str, tree_paths: set[str], ext
             full = candidate + try_ext
             if full in tree_paths:
                 return full
-        for idx in ("index.ts", "index.tsx", "index.js", "index.jsx"):
+        for idx in ("index.ts", "index.tsx", "index.js", "index.jsx", "index.mjs", "index.mts"):
             full = os.path.join(candidate, idx)
             if full in tree_paths:
                 return full

@@ -1,19 +1,26 @@
 # Claude Bedrock PR Reviewer
 
-AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Provides senior-engineer-level review comments with inline suggestions, design feedback, and automatic repo context awareness.
+AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Provides senior-engineer-level review comments with inline suggestions, design feedback, and automatic repo context awareness — all from a single Python script with zero dependencies.
+
+<p align="center">
+  <img src="diagrams/01_system_architecture.png" alt="System Architecture">
+</p>
 
 ## Features
 
 - **Automatic reviews** on every PR (opened, reopened, ready for review)
 - **On-demand reviews** via `/claude-review` comment for re-reviewing after new commits
-- **Large PR support** — handles 1000+ line PRs with diff-only fallback for oversized files
-- **Full repository awareness** — fetches the directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs — not just the diff
+- **Map-reduce pipeline** — handles large PRs (8+ files or 1500+ changes) with parallel batch reviews and cross-file consolidation
+- **Smart token optimization** — 30-40% token savings via expanded diff context, structural signatures, and intelligent truncation
+- **Full repository awareness** — directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs
+- **Linter-aware suggestions** — fetches your project's linter/formatter configs (64+ patterns across 10+ languages) so every `suggestion` block respects your rules
 - **Custom guidelines** — optional `.github/claude-review.md` for repo-specific review instructions
 - **Inline code suggestions** with GitHub's native suggestion blocks (one-click apply)
 - **5 severity levels** — critical, warning, suggestion, design, nitpick — each with distinct icons
-- **Senior-level review checklist** — security, concurrency, edge cases, resource management, test coverage, API contracts, design improvements, and dead code detection
+- **Senior-level review checklist** — security, concurrency, edge cases, resource management, test coverage, API contracts, design, and dead code
 - **Comment deduplication** — skips duplicate comments on re-review so you don't get the same feedback twice
 - **Instant feedback** — posts a placeholder comment immediately while Claude analyzes
+- **Version label and AI disclaimer** — every comment shows the reviewer version and an AI-generated content notice
 - **Merge gate** — sets a commit status (`Claude Bedrock PR Review`) that can be required in branch protection rules
 - **Smart invalidation** — new commits automatically set the status to "pending" so stale reviews don't block merges
 - **Draft PR aware** — skips draft PRs to avoid wasting API calls
@@ -87,7 +94,14 @@ jobs:
 
 That's it. The action handles everything else.
 
-## How it works
+## Architecture
+
+The reviewer is a single Python script (~2600 lines, zero dependencies) that runs as a composite GitHub Action. It communicates with two external systems:
+
+- **GitHub API** — reads PR metadata, changed files, file contents, config files, and existing comments; writes summary comments, inline review comments, and commit statuses
+- **Amazon Bedrock** — sends the assembled prompt to Claude via the Converse API and parses the JSON response
+
+### Event handling
 
 | Event | Behavior |
 |-------|----------|
@@ -101,30 +115,100 @@ That's it. The action handles everything else.
 2. **Inline comments** — posted on the relevant lines in the diff, with optional `suggestion` blocks for one-click fixes
 3. **Commit status** — `Claude Bedrock PR Review` on the head commit (`success`, `pending`, or `error`)
 
-## Repository context
+Every comment includes the reviewer version (e.g. `v1.3.0`) and an AI-generated content disclaimer.
 
-The reviewer automatically fetches config files from your repo to understand the tech stack. This prevents false positives like suggesting Python 3.9 syntax when your project targets 3.11.
+## Review flow
 
-**Auto-detected config files** (fetched if they exist, silently skipped if not):
+<p align="center">
+  <img src="diagrams/02_review_pipeline.png" alt="Review Pipeline">
+</p>
 
-| Language | Files |
-|----------|-------|
-| Python | `pyproject.toml`, `setup.cfg`, `setup.py`, `.python-version`, `requirements.txt`, `Pipfile` |
-| JavaScript / TypeScript | `package.json`, `tsconfig.json`, `.nvmrc`, `.node-version` |
-| Java / Kotlin | `pom.xml`, `build.gradle`, `build.gradle.kts` |
-| Scala | `build.sbt`, `project/build.properties` |
-| Go | `go.mod` |
-| Rust | `Cargo.toml` |
-| Containers | `Dockerfile`, `docker-compose.yml`, `docker-compose.yaml` |
-| General | `.tool-versions`, `.editorconfig` |
+The review follows a 12-step pipeline:
 
-**Auto-detected documentation files:**
+1. **PR event triggered** — GitHub webhook fires on open/reopen/ready/comment
+2. **Generate GitHub App token** — secure authentication via `actions/create-github-app-token`
+3. **Post placeholder comment** — immediate feedback via curl (no Python needed)
+4. **Set commit status to pending** — merge gate activated
+5. **Fetch PR metadata** — title, description, head SHA
+6. **Fetch changed files** — paginated diffs and file statuses
+7. **Build context layers** — repo configs, docs, guidelines, tree, siblings, imports, linter configs
+8. **Build prompt** — assemble all context + changed files (up to ~219K characters)
+9. **Call Claude via Bedrock** — Converse API, 180s timeout, bearer token auth
+10. **Parse JSON response** — extract summary + comments array
+11. **Filter and deduplicate** — validate against diff lines, remove duplicates
+12. **Post review to GitHub** — summary comment, inline comments, commit status
 
-| File | Purpose |
-|------|---------|
-| `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md` | Project documentation |
-| `CLAUDE.md`, `.cursorrules`, `.cursor/rules/review.md`, `.cursor/rules/code-style.md` | AI coding conventions |
-| `.github/CODEOWNERS`, `.github/pull_request_template.md` | GitHub conventions |
+If the review returns 0 comments on a PR with 150+ additions, a second-pass review is triggered with a diff-only prompt to catch anything missed.
+
+## Large PR support (map-reduce)
+
+For PRs with **8+ files** or **1500+ total changes**, the reviewer automatically activates a map-reduce pipeline instead of the single-pass review:
+
+```
+Small PR  →  single-pass review (unchanged)
+
+Large PR  →  MAP:     parallel batch reviews (5-8 files each, full context)
+          →  REDUCE:  cross-file consolidation (dedup, validate, enhance)
+          →  filter + post (shared path)
+```
+
+### How it works
+
+1. **Grouping** — files are grouped into batches by directory affinity (files in the same directory stay together), with up to 8 files per batch
+2. **Map phase** — each batch is reviewed in parallel via `ThreadPoolExecutor`, with batch-specific sibling files and imports for local context, plus full PR scope awareness
+3. **Reduce phase** — a consolidation pass deduplicates comments, validates suggestions, and detects cross-file issues (broken contracts, mismatched interfaces, missing test updates)
+4. **Shared context** — repo configs, docs, guidelines, and the directory tree are computed once and reused across all batches via a thread-safe file content cache
+
+### Cost and latency
+
+| PR Size | Mode | API Calls | Est. Cost | Est. Latency |
+|---------|------|-----------|-----------|-------------|
+| 500 lines, 4 files | Single-pass | 1 | ~$0.15 | ~30s |
+| 2K lines, 12 files | Map-reduce | 3+1 = 4 | ~$0.55 | ~50s |
+| 5K lines, 25 files | Map-reduce | 4+1 = 5 | ~$1.00 | ~60s |
+
+Latency stays low because map batches run in parallel — wall time is `max(batch) + reduce`, not `sum(batches) + reduce`.
+
+### Failure handling
+
+- If some batches fail, the review is posted as **partial** with a warning in the summary and `failure` commit status to block merges
+- Deletions-only PRs (zero reviewable files) exit early with a "no reviewable files" status
+
+## Context window
+
+<p align="center">
+  <img src="diagrams/03_context_window.png" alt="Context Window">
+</p>
+
+The reviewer assembles a rich context window for Claude, organized into budget-controlled layers:
+
+| Layer | Budget | Description |
+|-------|--------|-------------|
+| PR information | ~2K | Title + description (first 2,000 characters) |
+| Repository context | 12K | Language configs (`pyproject.toml`, `package.json`, `tsconfig.json`, `go.mod`, etc.) |
+| Repository tree | 8K | Full directory listing via Git Trees API, with focused subtrees for large repos |
+| Sibling files | 18K | Up to 5 files total, with at most 3 per directory (same extension, ranked by name similarity, min 0.3 relevance) |
+| Imported modules | 20K | Local modules referenced by `import`/`require()` in changed files |
+| Linter/formatter configs | 12K | Active linter rules from 64+ config file patterns |
+| Project documentation | 8K | `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `CLAUDE.md`, `.cursorrules` |
+| Custom guidelines | 4K | `.github/claude-review.md` — team-specific review instructions |
+| Related context | 15K | Auto-inferred test files and build configs |
+| Changed files (PR diff) | 180K | Full content + unified diff (smart context for large files) |
+
+### Smart file inclusion
+
+For files over 200 lines, full file content is replaced with an optimized representation:
+
+- **Header + imports** (first 30 lines) for module-level context
+- **Expanded diff hunks** (40 lines of context around each changed region)
+- **Structural signatures** (`def`, `class`, `fn`, `struct`, `interface`, etc.) from omitted sections so Claude still sees the file's shape
+
+If the expanded context covers >70% of the file, the full content is sent instead. Estimated savings: **40-60% of file content tokens**.
+
+### Smart context extraction
+
+- **`package.json`** — only essential keys are extracted (name, scripts, dependencies, engines, workspaces); noise like browserslist/jest/babel config is dropped
+- **`README.md`** (context files) — truncated at the 3rd `##` heading to keep the project description while dropping installation/license/contributing boilerplate
 
 ### Repository structure
 
@@ -138,11 +222,32 @@ Noisy directories (`node_modules`, `__pycache__`, `dist`, `build`, `.git`, etc.)
 
 ### Sibling files
 
-For each directory containing changed files, the reviewer fetches up to 3 existing source files with the same extension. This lets Claude compare the PR's code against established patterns in the same directory — class structure, error handling, naming conventions, and architectural patterns.
+For each directory containing changed files, the reviewer fetches up to 5 existing source files total, with at most 3 from any single directory. Files are matched by extension and ranked by name similarity (minimum 0.3 relevance score). Barrel files like `__init__.py` and `index.js` are filtered out. This lets Claude compare the PR's code against established patterns — class structure, error handling, naming conventions, and architecture.
 
 ### Import resolution
 
 The reviewer parses `import` / `from ... import` / `require()` statements in the changed files and fetches the referenced local modules. This lets Claude verify that the changed code uses internal APIs correctly — right parameter types, proper return value handling, and interface compliance.
+
+## Linter-aware suggestions
+
+The reviewer automatically fetches linter and formatter configuration files from your repository so that every `suggestion` block in the review respects your project's rules. A suggestion that introduces a linter violation is treated as worse than no suggestion at all.
+
+**Supported tools** (64+ config file patterns):
+
+| Language | Tools |
+|----------|-------|
+| Python | ruff, flake8, pylint, mypy, isort, bandit, pyre |
+| JavaScript / TypeScript | ESLint, Prettier, Biome, Deno |
+| Go | golangci-lint |
+| Rust | rustfmt, clippy |
+| Ruby | RuboCop |
+| Java / Kotlin | Checkstyle, Scalafmt |
+| Swift | SwiftLint |
+| PHP | PHP-CS-Fixer, PHPCS, PHPStan |
+| C/C++ | clang-format, clang-tidy |
+| General | Stylelint, markdownlint, EditorConfig |
+
+When the Git Trees API is available, all 64+ patterns are checked via fast set lookup. If the tree is unavailable (truncated or failed), a high-signal subset of ~17 files is checked as fallback.
 
 ## Custom review guidelines
 

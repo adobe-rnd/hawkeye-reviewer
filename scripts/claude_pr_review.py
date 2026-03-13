@@ -449,24 +449,26 @@ def _smart_truncate(path: str, content: str, max_chars: int) -> str:
     if basename == "package.json":
         try:
             data = json.loads(content)
-            filtered = {
-                k: v for k, v in data.items()
-                if k in _PACKAGE_JSON_ESSENTIAL_KEYS
-            }
-            result = json.dumps(filtered, indent=2)
-            if len(result) <= max_chars:
-                return result
-            filtered.pop("devDependencies", None)
-            return json.dumps(filtered, indent=2)[:max_chars]
+            if isinstance(data, dict):
+                filtered = {
+                    k: v for k, v in data.items()
+                    if k in _PACKAGE_JSON_ESSENTIAL_KEYS
+                }
+                result = json.dumps(filtered, indent=2)
+                if len(result) <= max_chars:
+                    return result
+                filtered.pop("devDependencies", None)
+                return json.dumps(filtered, indent=2)[:max_chars]
         except (json.JSONDecodeError, TypeError):
             pass
 
     if basename.upper().startswith("README"):
+        suffix = "\n... (remaining sections omitted)"
         headings = list(re.finditer(r"^## ", content, re.MULTILINE))
         if len(headings) >= 3:
             cut = headings[2].start()
-            if cut < max_chars:
-                return content[:cut].rstrip() + "\n... (remaining sections omitted)"
+            if cut + len(suffix) <= max_chars:
+                return content[:cut].rstrip() + suffix
 
     if len(content) > max_chars:
         return content[:max_chars] + "\n... (truncated)"
@@ -1301,6 +1303,8 @@ def _extract_hunk_line_ranges(patch: str) -> list[tuple[int, int]]:
         count = int(m.group(2)) if m.group(2) else 1
         if count > 0:
             ranges.append((start, start + count - 1))
+        else:
+            ranges.append((start, start))
     return ranges
 
 

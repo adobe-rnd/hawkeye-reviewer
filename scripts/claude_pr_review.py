@@ -178,7 +178,7 @@ def set_commit_status(owner: str, repo: str, sha: str, state: str, description: 
 
 PLACEHOLDER_BODY = (
     f'<h2><img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle"> '
-    f"Reviewing your PR... <sub>v{VERSION}</sub></h2>\n\n"
+    f"Reviewing your PR...</h2>\n\n"
     "\u23f3 Claude is analyzing your changes. "
     "A detailed review with inline comments will appear here shortly."
 )
@@ -1571,11 +1571,16 @@ def call_claude(prompt: str, api_url: str, api_token: str) -> str:
     }
     payload = {
         "messages": [{"role": "user", "content": [{"text": prompt}]}],
+        "inferenceConfig": {"maxTokens": 16384},
     }
     result = http_post(api_url, headers, payload, timeout=180)
     if result["status"] >= 400:
         raise RuntimeError(f"Claude API error {result['status']}: {result['body']}")
     data = result["body"]
+
+    stop_reason = data.get("stopReason", "")
+    if stop_reason == "max_tokens":
+        print("  WARNING: Response truncated (hit maxTokens limit).", file=sys.stderr)
 
     try:
         contents = (data.get("output") or {}).get("message", {}).get("content", [])
@@ -1622,7 +1627,7 @@ def format_summary_comment(
 
     logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
 
-    header = f"<h2>{logo} Pull request overview <sub>v{VERSION}</sub></h2>"
+    header = f"<h2>{logo} Pull request overview</h2>"
     overview = summary.get("overview", "")
     if overview:
         parts.append(f"{header}\n\n{overview}")
@@ -1669,7 +1674,7 @@ def format_summary_comment(
     mode_text = f" | {review_mode}" if review_mode else ""
     parts.append(
         f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock{mode_text}"
-        " | Type `/claude-review` in a comment to re-review after new commits</sub>\n\n"
+        f" | Type `/claude-review` in a comment to re-review after new commits | v{VERSION}</sub>\n\n"
         f"<sub>{AI_DISCLAIMER}</sub>"
     )
 
@@ -2688,10 +2693,10 @@ def main() -> None:
             if not response:
                 print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
                 fallback_body = (
-                    f"<h2>{logo} AI PR Review <sub>v{VERSION}</sub></h2>\n\n"
+                    f"<h2>{logo} AI PR Review</h2>\n\n"
                     "Claude returned a response that could not be parsed as structured JSON.\n\n"
                     f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
-                    f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>\n\n"
+                    f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
                     f"<sub>{AI_DISCLAIMER}</sub>"
                 )
                 edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
@@ -2770,10 +2775,10 @@ def main() -> None:
     except Exception as exc:
         print(f"  Review failed: {exc}", file=sys.stderr)
         error_body = (
-            f"<h2>{logo} AI PR Review <sub>v{VERSION}</sub></h2>\n\n"
+            f"<h2>{logo} AI PR Review</h2>\n\n"
             f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
             "This may be a transient issue. Type `/claude-review` in a comment to retry.\n\n"
-            f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>\n\n"
+            f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
         try:

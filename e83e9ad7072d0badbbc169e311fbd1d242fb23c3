@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "e83e9ad7072d0badbbc169e311fbd1d242fb23c3",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-13T22:26:57+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 132,
+    "total_deletions": 27,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 132,
+    "human_deletions": 27
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 0,
+      "human_additions": 132,
+      "ai_deletions": 0,
+      "human_deletions": 27
+    },
+    "diagrams/.DS_Store": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/01_system_architecture.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/02_review_pipeline.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/03_context_window.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    }
+  }
+}

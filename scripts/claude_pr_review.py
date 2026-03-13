@@ -435,6 +435,43 @@ GUIDELINES_PATHS = [
 
 GUIDELINES_MAX_CHARS = 4000
 
+_PACKAGE_JSON_ESSENTIAL_KEYS = [
+    "name", "version", "type", "private", "main", "module", "types",
+    "scripts", "dependencies", "devDependencies", "peerDependencies",
+    "engines", "workspaces",
+]
+
+
+def _smart_truncate(path: str, content: str, max_chars: int) -> str:
+    """Truncate context files intelligently, extracting high-signal content."""
+    basename = os.path.basename(path)
+
+    if basename == "package.json":
+        try:
+            data = json.loads(content)
+            filtered = {
+                k: v for k, v in data.items()
+                if k in _PACKAGE_JSON_ESSENTIAL_KEYS
+            }
+            result = json.dumps(filtered, indent=2)
+            if len(result) <= max_chars:
+                return result
+            filtered.pop("devDependencies", None)
+            return json.dumps(filtered, indent=2)[:max_chars]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if basename.upper().startswith("README"):
+        headings = list(re.finditer(r"^## ", content, re.MULTILINE))
+        if len(headings) >= 3:
+            cut = headings[2].start()
+            if cut < max_chars:
+                return content[:cut].rstrip() + "\n... (remaining sections omitted)"
+
+    if len(content) > max_chars:
+        return content[:max_chars] + "\n... (truncated)"
+    return content
+
 
 def get_repo_context(owner: str, repo: str, ref: str, token: str, tree_paths: set[str] | None = None) -> str:
     """Fetch well-known config files from the repo to give Claude project context."""
@@ -447,9 +484,7 @@ def get_repo_context(owner: str, repo: str, ref: str, token: str, tree_paths: se
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
-        truncated = content[:REPO_CONTEXT_MAX_PER_FILE]
-        if len(content) > REPO_CONTEXT_MAX_PER_FILE:
-            truncated += "\n... (truncated)"
+        truncated = _smart_truncate(path, content, REPO_CONTEXT_MAX_PER_FILE)
         block = f"### {path}\n```\n{truncated}\n```"
         if total_chars + len(block) > REPO_CONTEXT_MAX_TOTAL:
             break
@@ -471,9 +506,7 @@ def get_repo_docs(owner: str, repo: str, ref: str, token: str, tree_paths: set[s
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
-        truncated = content[:REPO_DOCS_MAX_PER_FILE]
-        if len(content) > REPO_DOCS_MAX_PER_FILE:
-            truncated += "\n... (truncated)"
+        truncated = _smart_truncate(path, content, REPO_DOCS_MAX_PER_FILE)
         block = f"### {path}\n```\n{truncated}\n```"
         if total_chars + len(block) > REPO_DOCS_MAX_TOTAL:
             break
@@ -783,9 +816,10 @@ def get_repo_tree(
 # ---------------------------------------------------------------------------
 
 SIBLING_MAX_PER_FILE = 3_000
-SIBLING_MAX_TOTAL = 25_000
+SIBLING_MAX_TOTAL = 18_000
 SIBLING_MAX_PER_DIR = 3
-SIBLING_MAX_FILES = 8
+SIBLING_MAX_FILES = 5
+SIBLING_MIN_RELEVANCE = 0.3
 
 
 def _sibling_relevance(candidate: str, changed_names: list[set[str]]) -> float:
@@ -856,9 +890,11 @@ def get_sibling_files(
     dir_counts: dict[str, int] = {}
     total_files = 0
 
-    for path, dirpart, _score in candidates:
+    for path, dirpart, score in candidates:
         if total_files >= SIBLING_MAX_FILES or total_chars >= SIBLING_MAX_TOTAL:
             break
+        if score < SIBLING_MIN_RELEVANCE:
+            continue
         if dir_counts.get(dirpart, 0) >= SIBLING_MAX_PER_DIR:
             continue
         if fetched_paths is not None and path in fetched_paths:
@@ -1226,7 +1262,7 @@ REVIEW_PROMPT = textwrap.dedent("""\
 def _build_file_block(path: str, status: str, content: str, patch: str) -> str:
     """Build a full file block with numbered source and diff."""
     numbered = "\n".join(
-        f"{i}: {line}" for i, line in enumerate(content.splitlines(), start=1)
+        f"{i}|{line}" for i, line in enumerate(content.splitlines(), start=1)
     )
     diff_section = f"\nDIFF:\n{patch}\n" if patch else ""
     return f"FILE: {path} (status: {status})\n{numbered}{diff_section}\n\n"
@@ -1235,6 +1271,123 @@ def _build_file_block(path: str, status: str, content: str, patch: str) -> str:
 def _build_diff_only_block(path: str, status: str, patch: str) -> str:
     """Build a lighter block containing only the diff (no full source)."""
     return f"FILE: {path} (status: {status}) [diff only — file too large for full content]\nDIFF:\n{patch}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# Smart file inclusion — expanded diff context for large files
+# ---------------------------------------------------------------------------
+
+SMART_FILE_THRESHOLD = 200
+SMART_FILE_HEADER_LINES = 30
+SMART_FILE_CONTEXT_LINES = 40
+SMART_FILE_COVERAGE_THRESHOLD = 0.7
+
+_DEFINITION_RE = re.compile(
+    r"^[ \t]{0,8}"
+    r"(?:(?:export|default|public|private|protected|static|abstract|async|"
+    r"override|final|sealed|pub|unsafe)\s+)*"
+    r"(?:def|function\*?|class|interface|type|enum|struct|trait|impl|fn|func|module)"
+    r"\s+\w+"
+)
+
+
+def _extract_hunk_line_ranges(patch: str) -> list[tuple[int, int]]:
+    """Extract (start_line, end_line) on the new-file side for each diff hunk."""
+    ranges: list[tuple[int, int]] = []
+    for m in re.finditer(
+        r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", patch, re.MULTILINE,
+    ):
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) else 1
+        if count > 0:
+            ranges.append((start, start + count - 1))
+    return ranges
+
+
+def _merge_ranges(
+    ranges: list[tuple[int, int]], gap: int = 0,
+) -> list[tuple[int, int]]:
+    """Merge overlapping or adjacent ranges (within *gap* lines of each other)."""
+    if not ranges:
+        return []
+    sorted_ranges = sorted(ranges)
+    merged = [sorted_ranges[0]]
+    for start, end in sorted_ranges[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + gap + 1:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _expand_ranges(
+    ranges: list[tuple[int, int]], context: int, max_line: int,
+) -> list[tuple[int, int]]:
+    """Expand each range by *context* lines in both directions and merge."""
+    expanded = [
+        (max(1, s - context), min(max_line, e + context)) for s, e in ranges
+    ]
+    return _merge_ranges(expanded)
+
+
+def _build_smart_file_block(
+    path: str, status: str, content: str, patch: str,
+) -> str:
+    """Build a file block with smart context: full content for small files,
+    expanded diff hunks + structural signatures for large files."""
+    file_lines = content.splitlines()
+    total_lines = len(file_lines)
+
+    if total_lines <= SMART_FILE_THRESHOLD or not patch:
+        return _build_file_block(path, status, content, patch)
+
+    hunk_ranges = _extract_hunk_line_ranges(patch)
+    if not hunk_ranges:
+        return _build_file_block(path, status, content, patch)
+
+    expanded = _expand_ranges(
+        hunk_ranges, SMART_FILE_CONTEXT_LINES, total_lines,
+    )
+    header_range = (1, min(SMART_FILE_HEADER_LINES, total_lines))
+    merged = _merge_ranges([header_range] + expanded, gap=5)
+
+    included_count = sum(e - s + 1 for s, e in merged)
+    if included_count / total_lines >= SMART_FILE_COVERAGE_THRESHOLD:
+        return _build_file_block(path, status, content, patch)
+
+    included: set[int] = set()
+    for s, e in merged:
+        included.update(range(s, e + 1))
+
+    signatures: list[str] = []
+    for i, line in enumerate(file_lines, 1):
+        if i not in included and _DEFINITION_RE.match(line):
+            signatures.append(f"{i}|{line}")
+
+    sections: list[str] = []
+    for s, e in merged:
+        chunk = [
+            f"{i}|{file_lines[i - 1]}"
+            for i in range(s, min(e + 1, total_lines + 1))
+        ]
+        sections.append("\n".join(chunk))
+
+    numbered = "\n...\n".join(sections)
+    if signatures:
+        numbered += (
+            "\n\n# Other definitions in this file (not shown):\n"
+            + "\n".join(signatures)
+        )
+
+    diff_section = f"\nDIFF:\n{patch}\n" if patch else ""
+    omitted = total_lines - included_count
+    return (
+        f"FILE: {path} (status: {status}) "
+        f"[{total_lines} lines, {omitted} omitted — "
+        f"showing imports + context around changes]\n"
+        f"{numbered}{diff_section}\n\n"
+    )
 
 
 def fetch_shared_context(
@@ -1316,7 +1469,7 @@ def build_prompt(
 
         file_contents[path] = content
 
-        block = _build_file_block(path, status, content, patch)
+        block = _build_smart_file_block(path, status, content, patch)
 
         if total_chars + len(block) > max_chars:
             if patch:
@@ -2111,7 +2264,7 @@ def build_batch_prompt(
             continue
 
         file_contents[path] = content
-        block = _build_file_block(path, status, content, patch)
+        block = _build_smart_file_block(path, status, content, patch)
 
         if total_chars + len(block) > max_chars:
             if patch:

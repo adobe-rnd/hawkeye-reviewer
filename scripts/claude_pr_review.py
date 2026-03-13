@@ -13,6 +13,7 @@ import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 GITHUB_API = "https://api.github.com"
@@ -1050,6 +1051,28 @@ def _build_diff_only_block(path: str, status: str, patch: str) -> str:
     return f"FILE: {path} (status: {status}) [diff only — file too large for full content]\nDIFF:\n{patch}\n\n"
 
 
+def fetch_shared_context(
+    owner: str,
+    repo: str,
+    head_sha: str,
+    token: str,
+    repo_tree: str = "",
+    tree_paths: set[str] | None = None,
+) -> dict[str, str]:
+    """Fetch repo context, docs, guidelines, and tree formatting — shared across all review batches."""
+    repo_context = get_repo_context(owner, repo, head_sha, token, tree_paths)
+    repo_docs = get_repo_docs(owner, repo, head_sha, token, tree_paths)
+    guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
+
+    return {
+        "repo_context_section": f"## Repository context\n\n{repo_context}" if repo_context else "",
+        "repo_docs_section": f"## Project documentation\n\n{repo_docs}" if repo_docs else "",
+        "guidelines_section": f"## Repository guidelines\n\n{guidelines}" if guidelines else "",
+        "guidelines_raw": guidelines,
+        "repo_tree_section": f"## Repository structure\n\n```\n{repo_tree}\n```" if repo_tree else "",
+    }
+
+
 def build_prompt(
     pr_info: dict,
     files: list[dict],
@@ -1225,7 +1248,12 @@ def parse_response(text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def format_summary_comment(summary: dict, comments: list[dict], model_name: str = "Claude") -> str:
+def format_summary_comment(
+    summary: dict,
+    comments: list[dict],
+    model_name: str = "Claude",
+    review_mode: str = "",
+) -> str:
     parts: list[str] = []
 
     logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
@@ -1265,9 +1293,10 @@ def format_summary_comment(summary: dict, comments: list[dict], model_name: str 
         )
 
     footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
+    mode_text = f" | {review_mode}" if review_mode else ""
     parts.append(
-        f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock "
-        "| Type `/claude-review` in a comment to re-review after new commits</sub>"
+        f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock{mode_text}"
+        " | Type `/claude-review` in a comment to re-review after new commits</sub>"
     )
 
     return "\n\n".join(parts)
@@ -1486,6 +1515,604 @@ def build_retry_prompt(
 
 
 # ---------------------------------------------------------------------------
+# Map-reduce review pipeline
+# ---------------------------------------------------------------------------
+
+MAP_REDUCE_MIN_FILES = 8
+MAP_REDUCE_MIN_CHANGES = 1500
+BATCH_MAX_FILES = 8
+
+BATCH_REVIEW_PROMPT = textwrap.dedent("""\
+    You are an expert code reviewer. You are reviewing a **subset** of files
+    from a larger pull request. A separate consolidation pass will check
+    cross-file consistency afterwards, so focus on deep, thorough analysis of
+    the files assigned to you.
+
+    ## Pull Request
+    **Title:** {title}
+    **Description:** {description}
+
+    ### All changed files in this PR (for context — do NOT review files outside your batch)
+    {all_files_list}
+
+    ### Files in YOUR review batch ({batch_num} of {total_batches})
+    {batch_files_list}
+
+    {repo_context_section}
+
+    {repo_docs_section}
+
+    {guidelines_section}
+
+    {repo_tree_section}
+
+    ## Response schema
+
+    ```
+    {{
+      "summary": {{
+        "overview": "1-3 sentence description of what the files in this batch do",
+        "changes": ["bullet 1", "bullet 2"],
+        "files": [
+          {{"path": "relative/file.py", "description": "What changed in this file"}}
+        ]
+      }},
+      "comments": [
+        {{
+          "path": "relative/file.py",
+          "line": 42,
+          "severity": "critical | warning | suggestion | design | nitpick",
+          "message": "Explanation of the issue and how to fix it.",
+          "suggestion": "optional — the replacement line(s) that fix the issue"
+        }}
+      ]
+    }}
+    ```
+
+    ## Rules
+    - Only comment on lines that appear as ADDED (+) in each file's DIFF section.
+    - "suggestion" must be the exact replacement code (no line-number prefix, no
+      explanation) so it can be used in a GitHub "suggested change" block.
+      Multi-line suggestions are fine (separate lines with \\n).
+    - Do NOT comment on minor style/formatting preferences.
+    - Keep each "message" to 1-3 sentences — concise and actionable.
+    - Use the repository context (language versions, dependencies, config) to
+      calibrate your review. Do not suggest patterns or syntax incompatible with
+      the project's declared runtime, frameworks, or dependencies.
+    - If repository guidelines are provided, follow them. They take precedence
+      over your default review preferences.
+    - If a repository structure listing is provided, use it to understand the
+      project layout. Flag changes that introduce naming or placement inconsistent
+      with the existing directory structure.
+    - If sibling files are provided, compare the changes against them for
+      consistency in patterns, error handling, naming conventions, and code
+      structure.
+    - If imported local modules are provided, verify that the changed code uses
+      their APIs correctly — right parameter types, proper handling of return
+      values, and compliance with type signatures or interfaces.
+    - Be thorough and critical. It is better to surface a potential concern that
+      turns out to be fine than to miss a real bug, security hole, or broken
+      contract.
+    - Only return an empty "comments" array after you have carefully examined
+      every file in your batch and genuinely found nothing actionable.
+
+    ## What to look for
+
+    Review like a senior engineer with 10+ years of experience. Work through each
+    of these categories systematically for every file in your batch:
+
+    ### Correctness and edge cases
+    - Null/nil/None dereferences, missing nil checks
+    - Empty collections passed where non-empty is assumed
+    - Off-by-one errors in loops, slices, and ranges
+    - Integer overflow, underflow, or truncation on cast
+    - Unicode and encoding issues in string processing
+    - Boundary values: zero, negative, max-int, empty string
+
+    ### Security
+    - Hardcoded secrets, API keys, passwords, or tokens
+    - SQL injection (string concatenation in queries)
+    - XSS (unsanitized user input rendered in HTML)
+    - Path traversal (user input in file paths without sanitization)
+    - SSRF (user-controlled URLs in server-side requests)
+    - Insecure deserialization of untrusted data
+    - Missing input validation or overly permissive allow-lists
+    - Overly broad CORS, IAM, or file permissions
+
+    ### Concurrency and thread safety
+    - Race conditions on shared mutable state
+    - Missing locks, synchronization, or atomic operations
+    - Deadlock potential (lock ordering issues)
+    - Non-atomic check-then-act patterns (TOCTOU)
+    - Unsafe publication of objects between threads
+
+    ### Resource management
+    - Unclosed connections, file handles, streams, or sockets
+    - Missing try-with-resources, context managers, or defer statements
+    - Potential memory leaks (unbounded caches, growing collections, listeners
+      not removed)
+    - Unbounded queues or buffers that can cause OOM under load
+
+    ### Error handling
+    - Swallowed exceptions (empty catch/except blocks)
+    - Generic catch-all handlers that hide root causes
+    - Error messages that lack context for debugging in production
+    - Missing cleanup or rollback in error/failure paths
+    - Panics or unchecked exceptions that could crash the process
+
+    ### Test coverage
+    - New logic or branches added without corresponding test cases
+    - Tests that assert on the wrong thing or don't actually verify behavior
+    - Missing edge case tests for the boundary conditions listed above
+    - Flaky test patterns (time-dependent, order-dependent, non-deterministic)
+
+    ### API design and contracts
+    - Breaking changes to public interfaces or method signatures
+    - Missing input validation at API boundaries
+    - Inconsistent return types, error formats, or status codes
+    - Missing or incorrect documentation on public APIs
+
+    ### Design improvements (use "design" severity)
+    - Algorithm and data structure choices (e.g. DFS vs BFS, hash map vs sorted
+      set, quadratic vs linear approach)
+    - More suitable libraries or built-in functions that simplify the code
+    - Language-specific optimizations (e.g. Java streams/virtual threads, Python
+      generators/slots, Go channels, Scala tail recursion, Rust zero-cost
+      abstractions)
+    - Architectural decisions (e.g. Fargate vs Lambda, queues vs synchronous
+      calls, caching layers)
+    - Scalability concerns and cost optimization opportunities
+
+    ### Cross-file and integration concerns
+    - Imports/requires that reference paths outside the project or build root
+    - Existing test files that mock or stub behavior being changed (broken mocks)
+    - OpenAPI/Swagger specs: global security schemes inherited by new endpoints,
+      missing security overrides on public routes
+    - Build tool configs that may not support new import patterns or file locations
+    - Infrastructure-as-code that contradicts the API spec or application config
+    - Database migrations or schema changes inconsistent with ORM models
+
+    ### Dead code and unused artifacts
+    - Commented-out code that was committed instead of deleted
+    - Unreachable code after early returns, throws, break, continue, or
+      unconditional exits
+    - Variables, constants, or parameters that are declared but never read
+    - Unused imports or require statements
+    - Functions, methods, or classes defined in the PR that are never called
+    - Dead feature-flag branches where the flag is hard-coded or already removed
+    - Logging or debug statements that appear to be leftover from development
+      rather than intentional observability
+
+    {sibling_section}
+
+    {import_section}
+
+    {related_context_section}
+
+    ## Files to review
+
+    {files_text}
+""")
+
+
+REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
+    You are an expert code reviewer performing the final consolidation pass of a
+    map-reduce review. Multiple reviewers have independently analyzed subsets of
+    files in this pull request. Your job is to:
+
+    1. **Deduplicate** — remove comments that flag the same issue on the same line.
+    2. **Validate** — remove false positives by cross-checking comments against
+       the full set of diffs. Remove comments that are incorrect when considering
+       the broader context of all changes.
+    3. **Enhance** — add NEW comments for cross-file issues that individual
+       reviewers could not detect: broken contracts between files, inconsistent
+       interfaces, missing test updates for changed behavior, API schema
+       mismatches, build config incompatibilities.
+    4. **Unify** — produce a single, cohesive summary of the entire PR.
+
+    ## Pull Request
+    **Title:** {title}
+    **Description:** {description}
+
+    {guidelines_section}
+
+    ## Batch review results
+
+    {batch_results_text}
+
+    ## All changed file diffs
+
+    {all_diffs_text}
+
+    ## Response schema
+
+    Respond with a single JSON object — no markdown fences, no commentary.
+
+    ```
+    {{
+      "summary": {{
+        "overview": "1-3 sentence description of what this PR does overall",
+        "changes": ["bullet 1", "bullet 2"],
+        "files": [
+          {{"path": "relative/file.py", "description": "What changed in this file"}}
+        ]
+      }},
+      "comments": [
+        {{
+          "path": "relative/file.py",
+          "line": 42,
+          "severity": "critical | warning | suggestion | design | nitpick",
+          "message": "Explanation of the issue and how to fix it.",
+          "suggestion": "optional — the replacement line(s) that fix the issue"
+        }}
+      ]
+    }}
+    ```
+
+    ## Rules
+    - Only comment on lines that appear as ADDED (+) in each file's DIFF.
+    - "suggestion" must be the exact replacement code for GitHub suggested changes.
+      Multi-line suggestions are fine (separate lines with \\n).
+    - Keep every comment from the batch reviews UNLESS it is a clear duplicate or
+      demonstrably incorrect given cross-file context. When in doubt, keep it.
+    - Preserve the original severity, message, and suggestion of kept comments.
+    - For new cross-file comments you add, be specific about which files interact
+      and exactly what the inconsistency or broken contract is.
+    - Do NOT comment on minor style/formatting preferences.
+    - The final comment list should be comprehensive. It is better to include a
+      borderline comment than to miss a real issue.
+""")
+
+REDUCE_MAX_DIFFS_CHARS = 150_000
+
+
+def group_files_into_batches(files: list[dict]) -> list[list[dict]]:
+    """Group changed files into batches by directory proximity.
+
+    Keeps files from the same directory together. Each batch has at most
+    BATCH_MAX_FILES files. Directories larger than the cap are split.
+    """
+    reviewable = [f for f in files if f.get("status") != "removed"]
+    if not reviewable:
+        return []
+
+    dir_groups: dict[str, list[dict]] = {}
+    for f in reviewable:
+        d = os.path.dirname(f["filename"])
+        dir_groups.setdefault(d, []).append(f)
+
+    batches: list[list[dict]] = []
+    current_batch: list[dict] = []
+
+    for d in sorted(dir_groups.keys()):
+        group = dir_groups[d]
+
+        if len(group) > BATCH_MAX_FILES:
+            if current_batch:
+                batches.append(current_batch)
+                current_batch = []
+            for i in range(0, len(group), BATCH_MAX_FILES):
+                batches.append(group[i : i + BATCH_MAX_FILES])
+            continue
+
+        if current_batch and len(current_batch) + len(group) > BATCH_MAX_FILES:
+            batches.append(current_batch)
+            current_batch = []
+
+        current_batch.extend(group)
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
+def build_batch_prompt(
+    pr_info: dict,
+    batch_files: list[dict],
+    all_files: list[dict],
+    batch_num: int,
+    total_batches: int,
+    owner: str,
+    repo: str,
+    head_sha: str,
+    token: str,
+    shared_context: dict[str, str],
+    repo_tree: str,
+    tree_paths: set[str] | None,
+) -> str:
+    """Build a review prompt for a single batch of files."""
+    all_files_lines = []
+    for f in all_files:
+        if f.get("status") == "removed":
+            continue
+        all_files_lines.append(
+            f"- {f['filename']} ({f.get('status', 'modified')}, "
+            f"+{f.get('additions', 0)}/-{f.get('deletions', 0)})"
+        )
+    all_files_list = "\n".join(all_files_lines)
+
+    batch_files_list = "\n".join(f"- {f['filename']}" for f in batch_files)
+
+    included_files: list[str] = []
+    file_contents: dict[str, str] = {}
+    total_chars = 0
+    max_chars = 120_000
+
+    for f in batch_files:
+        path = f["filename"]
+        patch = f.get("patch", "")
+        status = f.get("status", "modified")
+        changes = f.get("changes", 0)
+
+        if changes > 800:
+            if patch:
+                block = _build_diff_only_block(path, status, patch)
+                included_files.append(block)
+                total_chars += len(block)
+                print(f"    [batch {batch_num}] {path}: diff only ({changes} changes)", file=sys.stderr)
+                continue
+            print(f"    [batch {batch_num}] {path}: skipped ({changes} changes, no patch)", file=sys.stderr)
+            continue
+
+        content = get_file_content(owner, repo, head_sha, path, token)
+        if not content:
+            if patch:
+                block = _build_diff_only_block(path, status, patch)
+                included_files.append(block)
+                total_chars += len(block)
+                print(f"    [batch {batch_num}] {path}: diff only (could not fetch content)", file=sys.stderr)
+                continue
+            continue
+
+        file_contents[path] = content
+        block = _build_file_block(path, status, content, patch)
+
+        if total_chars + len(block) > max_chars:
+            if patch:
+                fallback = _build_diff_only_block(path, status, patch)
+                included_files.append(fallback)
+                total_chars += len(fallback)
+                print(f"    [batch {batch_num}] {path}: diff only (exceeded budget)", file=sys.stderr)
+                continue
+            print(f"    [batch {batch_num}] {path}: skipped (exceeded budget)", file=sys.stderr)
+            continue
+
+        included_files.append(block)
+        total_chars += len(block)
+
+    files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
+
+    fetched_paths: set[str] = set()
+
+    sibling_context = ""
+    if tree_paths:
+        sibling_context = get_sibling_files(
+            batch_files, tree_paths, owner, repo, head_sha, token, fetched_paths,
+        )
+    sibling_section = (
+        "## Sibling files (same directories as changed files)\n\n"
+        "These files are NOT being changed but exist alongside the changed files. "
+        "Use them to verify the changes follow existing patterns and conventions.\n\n"
+        f"{sibling_context}"
+    ) if sibling_context else ""
+
+    import_context = ""
+    if tree_paths and file_contents:
+        changed_paths = {f["filename"] for f in batch_files}
+        import_context = get_imported_files(
+            file_contents, tree_paths, changed_paths,
+            owner, repo, head_sha, token, fetched_paths,
+        )
+    import_section = (
+        "## Imported local modules (referenced by changed code)\n\n"
+        "These local project files are imported by the changed files. "
+        "Use them to verify correct API usage and interface compliance.\n\n"
+        f"{import_context}"
+    ) if import_context else ""
+
+    related_context = get_related_context(
+        batch_files, owner, repo, head_sha, token, tree_paths, fetched_paths,
+    )
+    related_context_section = (
+        "## Related context files (not part of this PR)\n\n"
+        "These files are NOT being changed but may be affected by or relevant "
+        "to the changes above.\n\n"
+        f"{related_context}"
+    ) if related_context else ""
+
+    return BATCH_REVIEW_PROMPT.format(
+        title=pr_info.get("title", ""),
+        description=(pr_info.get("body") or "(no description)")[:2000],
+        all_files_list=all_files_list,
+        batch_files_list=batch_files_list,
+        batch_num=batch_num,
+        total_batches=total_batches,
+        repo_context_section=shared_context["repo_context_section"],
+        repo_docs_section=shared_context["repo_docs_section"],
+        guidelines_section=shared_context["guidelines_section"],
+        repo_tree_section=shared_context["repo_tree_section"],
+        sibling_section=sibling_section,
+        import_section=import_section,
+        related_context_section=related_context_section,
+        files_text=files_text,
+    )
+
+
+def build_reduce_prompt(
+    pr_info: dict,
+    files: list[dict],
+    batch_results: list[dict],
+    guidelines: str = "",
+) -> str:
+    """Build the reduce-phase prompt from batch results and all file diffs."""
+    results_parts: list[str] = []
+    for i, result in enumerate(batch_results, 1):
+        summary = result.get("summary", {})
+        comments = result.get("comments", [])
+        part = f"### Batch {i} summary\n"
+        part += f"Overview: {summary.get('overview', 'N/A')}\n"
+        changes = summary.get("changes", [])
+        if changes:
+            part += "Changes:\n" + "\n".join(f"- {c}" for c in changes) + "\n"
+        files_desc = summary.get("files", [])
+        if files_desc:
+            part += "Files:\n" + "\n".join(
+                f"- `{fd.get('path', '')}`: {fd.get('description', '')}"
+                for fd in files_desc
+            ) + "\n"
+        part += f"\n### Batch {i} comments ({len(comments)} total)\n"
+        part += "```json\n" + json.dumps(comments, indent=2) + "\n```\n"
+        results_parts.append(part)
+
+    batch_results_text = "\n".join(results_parts) if results_parts else "(No batch results.)"
+
+    diffs: list[str] = []
+    total_chars = 0
+    commented_paths: set[str] = set()
+    for result in batch_results:
+        for c in result.get("comments", []):
+            if isinstance(c, dict) and c.get("path"):
+                commented_paths.add(c["path"])
+
+    sorted_files = sorted(
+        [f for f in files if f.get("status") != "removed"],
+        key=lambda f: (f["filename"] not in commented_paths, f["filename"]),
+    )
+
+    for f in sorted_files:
+        patch = f.get("patch", "")
+        if not patch:
+            continue
+        path = f["filename"]
+        status = f.get("status", "modified")
+        block = f"FILE: {path} (status: {status})\nDIFF:\n{patch}\n"
+        if total_chars + len(block) > REDUCE_MAX_DIFFS_CHARS:
+            diffs.append("... (remaining files truncated to fit budget)")
+            break
+        diffs.append(block)
+        total_chars += len(block)
+
+    all_diffs_text = "\n".join(diffs) if diffs else "(no diffs)"
+
+    guidelines_section = (
+        f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
+    )
+
+    return REDUCE_REVIEW_PROMPT.format(
+        title=pr_info.get("title", ""),
+        description=(pr_info.get("body") or "(no description)")[:2000],
+        guidelines_section=guidelines_section,
+        batch_results_text=batch_results_text,
+        all_diffs_text=all_diffs_text,
+    )
+
+
+def review_map_reduce(
+    pr_info: dict,
+    files: list[dict],
+    owner: str,
+    repo: str,
+    head_sha: str,
+    github_token: str,
+    api_url: str,
+    api_token: str,
+    repo_tree: str,
+    tree_paths: set[str] | None,
+    batches: list[list[dict]] | None = None,
+) -> tuple[dict, list[dict]]:
+    """Run a map-reduce review: parallel batch reviews followed by a consolidation pass."""
+    shared_context = fetch_shared_context(
+        owner, repo, head_sha, github_token, repo_tree, tree_paths,
+    )
+
+    if batches is None:
+        batches = group_files_into_batches(files)
+    total_batches = len(batches)
+    print(f"  Map-reduce: {total_batches} batch(es).", file=sys.stderr)
+
+    def _run_batch(batch_idx: int, batch_files: list[dict]) -> dict:
+        num = batch_idx + 1
+        file_list = ", ".join(f["filename"] for f in batch_files)
+        print(f"    Batch {num}/{total_batches}: {len(batch_files)} file(s) — {file_list}", file=sys.stderr)
+
+        prompt = build_batch_prompt(
+            pr_info, batch_files, files, num, total_batches,
+            owner, repo, head_sha, github_token,
+            shared_context, repo_tree, tree_paths,
+        )
+        text = call_claude(prompt, api_url, api_token)
+        result = parse_response(text)
+        if result:
+            n_comments = len(result.get("comments", []))
+            print(f"    Batch {num}/{total_batches}: {n_comments} comment(s).", file=sys.stderr)
+        else:
+            print(f"    Batch {num}/{total_batches}: failed to parse response.", file=sys.stderr)
+        return result
+
+    batch_results: list[dict] = []
+    failed_batches = 0
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {
+            pool.submit(_run_batch, i, batch): i
+            for i, batch in enumerate(batches)
+        }
+        results_by_idx: dict[int, dict] = {}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    results_by_idx[idx] = result
+                else:
+                    failed_batches += 1
+            except Exception as exc:
+                print(f"    Batch {idx + 1}/{total_batches} failed: {exc}", file=sys.stderr)
+                failed_batches += 1
+
+    for i in range(total_batches):
+        if i in results_by_idx:
+            batch_results.append(results_by_idx[i])
+
+    if failed_batches:
+        print(f"  Map phase: {failed_batches} batch(es) failed.", file=sys.stderr)
+
+    if not batch_results:
+        raise RuntimeError(
+            f"Map-reduce review failed: all {total_batches} batch(es) returned errors"
+        )
+
+    total_map_comments = sum(len(r.get("comments", [])) for r in batch_results)
+    print(
+        f"  Map phase complete: {len(batch_results)} batch(es) succeeded, "
+        f"{total_map_comments} total comment(s).",
+        file=sys.stderr,
+    )
+
+    print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)
+    reduce_prompt = build_reduce_prompt(
+        pr_info, files, batch_results, shared_context.get("guidelines_raw", ""),
+    )
+    reduce_text = call_claude(reduce_prompt, api_url, api_token)
+    reduce_result = parse_response(reduce_text)
+
+    if not reduce_result:
+        print("  Reduce phase failed — falling back to raw batch results.", file=sys.stderr)
+        combined_summary = batch_results[0].get("summary", {})
+        combined_comments: list[dict] = []
+        for r in batch_results:
+            combined_comments.extend(r.get("comments", []))
+        return combined_summary, combined_comments
+
+    summary = reduce_result.get("summary", {})
+    comments = reduce_result.get("comments", [])
+    print(f"  Reduce phase complete: {len(comments)} final comment(s).", file=sys.stderr)
+
+    return summary, comments
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1543,36 +2170,62 @@ def main() -> None:
             valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
 
         repo_tree, tree_paths = get_repo_tree(owner, repo, head_sha, github_token, files)
-        prompt = build_prompt(
-            pr_info, files, owner, repo, head_sha, github_token,
-            repo_tree=repo_tree, tree_paths=tree_paths,
+
+        total_changes = sum(f.get("changes", 0) for f in files)
+        reviewable_count = sum(1 for f in files if f.get("status") != "removed")
+        use_map_reduce = (
+            reviewable_count >= MAP_REDUCE_MIN_FILES
+            or total_changes >= MAP_REDUCE_MIN_CHANGES
         )
 
-        print("  Calling Claude...", file=sys.stderr)
-        claude_text = call_claude(prompt, api_url, api_token)
+        review_mode = ""
 
-        response = parse_response(claude_text)
-        if not response:
-            print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
-            fallback_body = (
-                f"<h2>{logo} AI PR Review</h2>\n\n"
-                "Claude returned a response that could not be parsed as structured JSON.\n\n"
-                f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
-                f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
+        if use_map_reduce:
+            batches = group_files_into_batches(files)
+            num_batches = len(batches)
+            print(
+                f"  Using map-reduce review ({reviewable_count} files, "
+                f"{total_changes} changes, {num_batches} batches)...",
+                file=sys.stderr,
             )
-            edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
-            set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
-            return
+            summary, all_returned = review_map_reduce(
+                pr_info, files, owner, repo, head_sha, github_token,
+                api_url, api_token, repo_tree, tree_paths,
+                batches=batches,
+            )
+            review_mode = f"Map-reduce review ({num_batches} batches)"
+        else:
+            prompt = build_prompt(
+                pr_info, files, owner, repo, head_sha, github_token,
+                repo_tree=repo_tree, tree_paths=tree_paths,
+            )
 
-        summary = response.get("summary", {})
-        all_returned = response.get("comments", [])
+            print("  Calling Claude...", file=sys.stderr)
+            claude_text = call_claude(prompt, api_url, api_token)
+
+            response = parse_response(claude_text)
+            if not response:
+                print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
+                fallback_body = (
+                    f"<h2>{logo} AI PR Review</h2>\n\n"
+                    "Claude returned a response that could not be parsed as structured JSON.\n\n"
+                    f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
+                    f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock</sub>"
+                )
+                edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
+                set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
+                return
+
+            summary = response.get("summary", {})
+            all_returned = response.get("comments", [])
+
         raw_comments = [
             c
             for c in all_returned
             if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
         ]
         print(
-            f"  Claude returned {len(all_returned)} comment(s), "
+            f"  {len(all_returned)} comment(s) returned, "
             f"{len(raw_comments)} valid after schema check.",
             file=sys.stderr,
         )
@@ -1583,34 +2236,34 @@ def main() -> None:
         comments = filter_comments(raw_comments, valid_lines, existing)
         print(f"  {len(comments)} comment(s) survived filtering.", file=sys.stderr)
 
-        # Second-pass review if first pass found nothing on a large PR
-        total_additions = sum(f.get("additions", 0) for f in files)
-        if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:
-            print(
-                f"  Zero comments on {total_additions} additions — running second-pass review...",
-                file=sys.stderr,
-            )
-            retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
-            retry_prompt = build_retry_prompt(pr_info, files, retry_related)
-            retry_text = call_claude(retry_prompt, api_url, api_token)
-            retry_response = parse_response(retry_text)
-            if retry_response:
-                retry_all = retry_response.get("comments", [])
-                retry_raw = [
-                    c
-                    for c in retry_all
-                    if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
-                ]
+        if not use_map_reduce:
+            total_additions = sum(f.get("additions", 0) for f in files)
+            if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:
                 print(
-                    f"  Second pass returned {len(retry_all)} comment(s), "
-                    f"{len(retry_raw)} valid.",
+                    f"  Zero comments on {total_additions} additions — running second-pass review...",
                     file=sys.stderr,
                 )
-                retry_comments = filter_comments(retry_raw, valid_lines, existing)
-                print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
-                comments.extend(retry_comments)
+                retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
+                retry_prompt = build_retry_prompt(pr_info, files, retry_related)
+                retry_text = call_claude(retry_prompt, api_url, api_token)
+                retry_response = parse_response(retry_text)
+                if retry_response:
+                    retry_all = retry_response.get("comments", [])
+                    retry_raw = [
+                        c
+                        for c in retry_all
+                        if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
+                    ]
+                    print(
+                        f"  Second pass returned {len(retry_all)} comment(s), "
+                        f"{len(retry_raw)} valid.",
+                        file=sys.stderr,
+                    )
+                    retry_comments = filter_comments(retry_raw, valid_lines, existing)
+                    print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
+                    comments.extend(retry_comments)
 
-        summary_body = format_summary_comment(summary, comments, model_name)
+        summary_body = format_summary_comment(summary, comments, model_name, review_mode)
         post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)
         set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
 

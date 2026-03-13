@@ -1272,11 +1272,15 @@ def parse_response(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"\n?```\s*$", "", cleaned)
     cleaned = cleaned.strip()
     try:
-        return json.loads(cleaned)
+        result = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         print(f"JSON parse error: {exc}", file=sys.stderr)
         print(f"Raw text (first 500 chars): {cleaned[:500]}", file=sys.stderr)
         return {}
+    if not isinstance(result, dict):
+        print(f"Expected JSON object, got {type(result).__name__}", file=sys.stderr)
+        return {}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1289,6 +1293,7 @@ def format_summary_comment(
     comments: list[dict],
     model_name: str = "Claude",
     review_mode: str = "",
+    partial: bool = False,
 ) -> str:
     parts: list[str] = []
 
@@ -1322,6 +1327,12 @@ def format_summary_comment(
         parts.append(
             f"\n---\n{len(comments)} inline comment{'s' if len(comments) != 1 else ''} "
             f"posted ({breakdown})."
+        )
+    elif partial:
+        parts.append(
+            "\n---\n\u26a0\ufe0f Review incomplete — some batches failed. "
+            "No issues found in the files that were reviewed, but not all files "
+            "could be analyzed. Type `/claude-review` to retry."
         )
     else:
         parts.append(
@@ -2379,13 +2390,14 @@ def main() -> None:
                     print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
                     comments.extend(retry_comments)
 
-        summary_body = format_summary_comment(summary, comments, model_name, review_mode)
+        is_partial = use_map_reduce and failed_b > 0
+        summary_body = format_summary_comment(summary, comments, model_name, review_mode, partial=is_partial)
         post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)
 
         if use_map_reduce and failed_b:
             set_commit_status(
-                owner, repo, head_sha, "success",
-                f"Review complete (partial — {failed_b}/{num_batches} batches failed)",
+                owner, repo, head_sha, "failure",
+                f"Partial review — {failed_b}/{num_batches} batches failed, retry with /claude-review",
                 github_token,
             )
         else:

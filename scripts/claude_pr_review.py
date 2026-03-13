@@ -260,8 +260,9 @@ def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> 
 
     content = _fetch_file_content(owner, repo, ref, path, token)
 
-    with _file_content_lock:
-        _file_content_cache[cache_key] = content
+    if content:
+        with _file_content_lock:
+            _file_content_cache[cache_key] = content
 
     return content
 
@@ -1911,10 +1912,11 @@ def build_batch_prompt(
         if total_chars + len(block) > max_chars:
             if patch:
                 fallback = _build_diff_only_block(path, status, patch)
-                included_files.append(fallback)
-                total_chars += len(fallback)
-                print(f"    [batch {batch_num}] {path}: diff only (exceeded budget)", file=sys.stderr)
-                continue
+                if total_chars + len(fallback) <= max_chars:
+                    included_files.append(fallback)
+                    total_chars += len(fallback)
+                    print(f"    [batch {batch_num}] {path}: diff only (exceeded budget)", file=sys.stderr)
+                    continue
             print(f"    [batch {batch_num}] {path}: skipped (exceeded budget)", file=sys.stderr)
             continue
 
@@ -2272,6 +2274,18 @@ def main() -> None:
 
         total_changes = sum(f.get("changes", 0) for f in files)
         reviewable_count = sum(1 for f in files if f.get("status") != "removed")
+
+        if reviewable_count == 0:
+            print("  No reviewable files (deletions only) — skipping review.", file=sys.stderr)
+            summary_body = format_summary_comment(
+                {"overview": "This PR only removes files — no code to review."},
+                [], model_name,
+            )
+            if placeholder_id:
+                edit_comment(owner, repo, placeholder_id, summary_body, github_token)
+            set_commit_status(owner, repo, head_sha, "success", "No reviewable files", github_token)
+            return
+
         use_map_reduce = (
             reviewable_count >= MAP_REDUCE_MIN_FILES
             or total_changes >= MAP_REDUCE_MIN_CHANGES

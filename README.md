@@ -48,7 +48,20 @@ https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet
 
 ### 2. GitHub App
 
-The action uses a GitHub App for its bot identity. Install the App on your repository with these permissions:
+The action uses a GitHub App for its bot identity. You can use the shared App (ID `2914873`) if you have access to its private key, or create your own.
+
+**Option A: Use the shared App**
+
+Ask your team lead for the private key (`.pem` file) and install the App on your repository.
+
+**Option B: Create your own App**
+
+1. Go to **GitHub** > **Settings** > **Developer settings** > **GitHub Apps** > **New GitHub App**
+2. Fill in:
+   - **Name:** Any unique name (e.g. "Claude PR Reviewer - YourTeam")
+   - **Homepage URL:** Your repo URL
+   - **Webhook:** Uncheck "Active" (not needed)
+   - **Permissions:**
 
 | Permission | Access | Why |
 |------------|--------|-----|
@@ -56,6 +69,21 @@ The action uses a GitHub App for its bot identity. Install the App on your repos
 | Pull requests | Read & Write | Post review comments |
 | Issues | Read & Write | Post summary comments |
 | Commit statuses | Read & Write | Set the merge gate status |
+
+3. Click **Create GitHub App** and note the **App ID** from the settings page
+4. Scroll to **Private keys** > **Generate a private key** — saves a `.pem` file
+5. Go to **Install App** (left sidebar) and install it on your org/repos
+6. Store the `.pem` contents as the `CLAUDE_REVIEWER_APP_PRIVATE_KEY` secret
+7. Pass your App ID via the `app-id` input in your workflow:
+
+```yaml
+- uses: adobe-rnd/claude-pr-reviewer@v1
+  with:
+    app-id: 'YOUR_APP_ID'
+    app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
+    claude-api-url: ${{ secrets.CLAUDE_API_URL }}
+    claude-api-token: ${{ secrets.CLAUDE_API_TOKEN }}
+```
 
 ### 3. Workflow file
 
@@ -314,6 +342,7 @@ The action auto-detects the Claude model from the Bedrock endpoint URL and displ
 
 | Input | Required | Description |
 |-------|----------|-------------|
+| `app-id` | No | GitHub App ID (defaults to `2914873`) |
 | `app-private-key` | Yes | GitHub App private key (`.pem` contents) |
 | `claude-api-url` | No* | Bedrock converse endpoint URL |
 | `claude-api-token` | No* | Bedrock API bearer token |

@@ -5,6 +5,10 @@ branding:
   color: 'orange'
 
 inputs:
+  app-id:
+    description: 'GitHub App ID'
+    required: false
+    default: '2914873'
   app-private-key:
     description: 'GitHub App private key (.pem contents)'
     required: true
@@ -22,7 +26,7 @@ runs:
       id: app-token
       uses: actions/create-github-app-token@v1
       with:
-        app-id: 2914873
+        app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.app-private-key }}
 
     # Fast path: on new commits, just set status to pending via curl (no Python needed)

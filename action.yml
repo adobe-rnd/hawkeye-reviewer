@@ -12,6 +12,10 @@ inputs:
   app-private-key:
     description: 'GitHub App private key (.pem contents)'
     required: true
+  github-api-url:
+    description: 'GitHub API base URL (defaults to https://api.github.com for GitHub.com, use https://git.corp.adobe.com/api/v3 for GHES)'
+    required: false
+    default: 'https://api.github.com'
   claude-api-url:
     description: 'Bedrock converse endpoint URL (not required for invalidate-only runs)'
     required: false
@@ -35,12 +39,13 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        GITHUB_API_URL: ${{ inputs.github-api-url }}
       run: |
         curl -s -X POST \
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+          "${GITHUB_API_URL}/repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
           -d '{"state":"pending","context":"Claude Bedrock PR Review","description":"Type /claude-review to review latest changes"}'
         echo "Review status invalidated." >&2
 
@@ -51,6 +56,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        GITHUB_API_URL: ${{ inputs.github-api-url }}
       run: |
         PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
         VERSION=$(python3 -c "import re; m=re.search(r'VERSION\s*=\s*\"([^\"]+)\"', open('${{ github.action_path }}/scripts/claude_pr_review.py').read()); print(m.group(1) if m else 'unknown')")
@@ -58,7 +64,7 @@ runs:
           -H "Authorization: Bearer $GITHUB_TOKEN" \
           -H "Accept: application/vnd.github+json" \
           -H "X-GitHub-Api-Version: 2022-11-28" \
-          "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+          "${GITHUB_API_URL}/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
           -d "{\"body\":\"<h2><img src=\\\"https://github.com/anthropics.png?size=36\\\" width=\\\"18\\\" height=\\\"18\\\" align=\\\"absmiddle\\\"> Reviewing your PR...</h2>\n\n\u23f3 Claude is analyzing your changes. A detailed review with inline comments will appear here shortly.\"}")
         COMMENT_ID=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
         echo "comment-id=${COMMENT_ID}" >> "$GITHUB_OUTPUT"
@@ -69,6 +75,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        GITHUB_API_URL: ${{ inputs.github-api-url }}
         CLAUDE_API_URL: ${{ inputs.claude-api-url }}
         CLAUDE_API_TOKEN: ${{ inputs.claude-api-token }}
         PLACEHOLDER_COMMENT_ID: ${{ steps.placeholder.outputs.comment-id }}

@@ -46,13 +46,15 @@ Example `CLAUDE_API_URL`:
 https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
 ```
 
+**For GitHub Enterprise Server (GHES):** No additional secrets are needed — the action auto-detects GHES and uses the correct API endpoint. However, you must create a separate GitHub App on your GHES instance (see step 2 below).
+
 ### 2. GitHub App
 
 The action uses a GitHub App for its bot identity. You can use the shared App (ID `2914873`) if you have access to its private key, or create your own.
 
-**Option A: Use the shared App**
+**Option A: Use the shared App (GitHub.com only)**
 
-Ask your team lead for the private key (`.pem` file) and install the App on your repository.
+Ask your team lead for the private key (`.pem` file) and install the App on your repository or organization.
 
 **Option B: Create your own App**
 
@@ -84,6 +86,25 @@ Ask your team lead for the private key (`.pem` file) and install the App on your
     claude-api-url: ${{ secrets.CLAUDE_API_URL }}
     claude-api-token: ${{ secrets.CLAUDE_API_TOKEN }}
 ```
+
+**Option C: GitHub Enterprise Server (GHES)**
+
+For GHES deployments (e.g., `git.corp.adobe.com`):
+
+1. Create a GitHub App on your GHES instance following the same steps as Option B above
+2. The action automatically detects GHES and uses the correct API endpoint based on your server URL
+3. If you're using a private action deployment (copying the action to your GHES instance), reference it locally:
+
+```yaml
+- uses: your-org/claude-pr-reviewer@v1
+  with:
+    app-id: 'YOUR_GHES_APP_ID'
+    app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
+    claude-api-url: ${{ secrets.CLAUDE_API_URL }}
+    claude-api-token: ${{ secrets.CLAUDE_API_TOKEN }}
+```
+
+If your GHES instance allows actions from GitHub.com, you can still reference `adobe-rnd/claude-pr-reviewer@v1` — the action will auto-detect the GHES environment and adjust accordingly.
 
 ### 3. Workflow file
 
@@ -344,7 +365,10 @@ The action auto-detects the Claude model from the Bedrock endpoint URL and displ
 |-------|----------|-------------|
 | `app-id` | No | GitHub App ID (defaults to `2914873`) |
 | `app-private-key` | Yes | GitHub App private key (`.pem` contents) |
+| `github-api-url` | No | GitHub API base URL (defaults to `https://api.github.com`, auto-detected for GHES) |
 | `claude-api-url` | No* | Bedrock converse endpoint URL |
 | `claude-api-token` | No* | Bedrock API bearer token |
 
 *`claude-api-url` and `claude-api-token` are not required for `synchronize` events (which only set a pending status). For all other events, both are required.
+
+**Note:** The `github-api-url` parameter is automatically detected from your GitHub server and typically doesn't need to be set manually. It's provided for advanced use cases or custom GitHub Enterprise configurations.

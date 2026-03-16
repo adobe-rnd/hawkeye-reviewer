@@ -17,9 +17,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-GITHUB_API = "https://api.github.com"
+GITHUB_API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 
-CLAUDE_AVATAR = "https://github.com/anthropics.png?size=36"
+# Derive avatar URL from GitHub API URL (handles both GitHub.com and GHES)
+_github_base = GITHUB_API.replace("/api/v3", "").replace("api.", "")
+CLAUDE_AVATAR = f"{_github_base}/anthropics.png?size=36"
 
 STATUS_CONTEXT = "Claude Bedrock PR Review"
 

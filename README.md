@@ -283,16 +283,6 @@ Large PR  →  MAP:     parallel batch reviews (5-8 files each, full context)
 3. **Reduce phase** — a consolidation pass deduplicates comments, validates suggestions, and detects cross-file issues (broken contracts, mismatched interfaces, missing test updates)
 4. **Shared context** — repo configs, docs, guidelines, and the directory tree are computed once and reused across all batches via a thread-safe file content cache
 
-### Cost and latency
-
-| PR Size | Mode | API Calls | Est. Cost | Est. Latency |
-|---------|------|-----------|-----------|-------------|
-| 500 lines, 4 files | Single-pass | 1 | ~$0.15 | ~30s |
-| 2K lines, 12 files | Map-reduce | 3+1 = 4 | ~$0.55 | ~50s |
-| 5K lines, 25 files | Map-reduce | 4+1 = 5 | ~$1.00 | ~60s |
-
-Latency stays low because map batches run in parallel — wall time is `max(batch) + reduce`, not `sum(batches) + reduce`.
-
 ### Failure handling
 
 - If some batches fail, the review is posted as **partial** with a warning in the summary and `failure` commit status to block merges
@@ -413,6 +403,100 @@ The reviewer works through a comprehensive checklist for every changed file:
 | Suggestion | :bulb: | Code improvements, better patterns, simplifications |
 | Design | :triangular_ruler: | Architecture, algorithms, language optimizations, infra choices |
 | Nitpick | :mag: | Minor observations, optional improvements |
+
+## Noise control
+
+Several layers work together to keep the review signal-to-noise ratio high.
+
+### Hard constraints in the prompt
+- **Diff-only scope** — comments are only allowed on lines that appear as added (`+`) in the diff; pre-existing code cannot be flagged
+- **No style/formatting comments** — minor preferences are explicitly excluded
+- **Linter compliance** — all suggestions must comply with your project's linter/formatter configs; a suggestion that would cause a linter error is treated as worse than no suggestion at all
+- **Concise messages** — each comment is capped at 1-3 sentences
+- **Compatibility check** — patterns incompatible with the project's declared runtime, frameworks, or dependencies are not suggested
+
+### Post-response filtering (always applied)
+After Claude responds, every comment is validated in code:
+- Comments on lines not present in the diff are dropped (catches hallucinated line numbers)
+- Comments matching an already-posted `(path, line, severity)` tuple are deduplicated — re-reviews don't repeat the same feedback
+
+### Reduce-phase deduplication (map-reduce only)
+The consolidation pass removes comments that flag the same issue on the same line across batches, and drops false positives that look incorrect given the full cross-file context.
+
+### Custom guidelines (your escape hatch)
+Create `.github/claude-review.md` to suppress entire categories or set project-specific rules:
+
+```markdown
+- Skip architecture/design suggestions, focus only on correctness
+- Ignore import ordering — handled by isort pre-commit hook
+- This is internal tooling — do not flag missing input validation
+```
+
+Guidelines take precedence over all default review behavior.
+
+### Design tradeoff
+The reviewer intentionally errs toward thoroughness over conservatism — it would rather surface a potential concern that turns out to be fine than miss a real bug or security issue. Noise is managed structurally (scope, style filter, linter compliance, dedup, custom guidelines) rather than by asking Claude to hold back. If you find the volume too high, the main lever is `.github/claude-review.md`.
+
+## Cost and latency
+
+### How many API calls per review
+
+| PR size | Mode | API calls |
+|---------|------|-----------|
+| < 8 files and < 1500 changes | Single-pass | 1 (+ 1 optional retry if 0 comments) |
+| ≥ 8 files or ≥ 1500 changes | Map-reduce | N batches + 1 reduce |
+
+Map batches run in parallel, so wall time is `max(batch_time) + reduce_time`, not the sum.
+
+### Token budget per call
+
+Each call has a hard character budget that caps the prompt size:
+
+| Call type | Input budget | Output cap |
+|-----------|-------------|------------|
+| Single-pass review | 180k chars (~50k tokens) | 16,384 tokens |
+| Map-reduce batch | 120k chars (~35k tokens) | 16,384 tokens |
+| Reduce (consolidation) | 150k chars diffs + 80k batch results | 16,384 tokens |
+| Second-pass retry | Diff-only, no full source | 16,384 tokens |
+
+~4 characters per token is a rough approximation — actual token counts vary by language and content.
+
+### Estimated costs
+
+Costs scale with PR size and model choice. Latency is dominated by the Claude API response time — typically 1–3 minutes per review.
+
+**Claude Sonnet 4.6**
+
+| PR size | Mode | API calls | Est. cost | Est. latency |
+|---------|------|-----------|-----------|--------------|
+| 500 lines, 4 files | Single-pass | 1 | ~$0.15 | ~1 min |
+| 1K lines, 6 files | Single-pass | 1 | ~$0.25 | ~2 min |
+| 2K lines, 12 files | Map-reduce | 3+1 = 4 | ~$0.55 | ~2–3 min |
+| 5K lines, 25 files | Map-reduce | 4+1 = 5 | ~$1.00 | ~3–5 min |
+
+**Claude Opus 4.6**
+
+| PR size | Mode | API calls | Est. cost | Est. latency |
+|---------|------|-----------|-----------|--------------|
+| 500 lines, 4 files | Single-pass | 1 | ~$0.25 | ~1 min |
+| 1K lines, 6 files | Single-pass | 1 | ~$0.50 | ~2 min |
+| 2K lines, 12 files | Map-reduce | 3+1 = 4 | ~$1.00 | ~2–3 min |
+| 5K lines, 25 files | Map-reduce | 4+1 = 5 | ~$2.00 | ~3–5 min |
+
+> All cost figures are rough estimates. Actual cost depends on how much of the token budget each call uses — prompts rarely hit the ceiling, so real costs are often lower.
+
+### What drives cost up
+
+- **Large files** — files over 200 lines use smart context (expanded hunks + signatures), but still consume more tokens than small files
+- **Many sibling/import files** — each batch fetches context files from the same directories; a codebase with many large modules costs more per batch
+- **High batch count** — more files = more batches = more parallel map calls, each billed independently
+- **Second-pass retry** — triggered automatically if a single-pass review returns 0 comments on a PR with 150+ additions
+
+### Reducing cost
+
+- Use a smaller/faster model (e.g. Claude Haiku) via the `CLAUDE_API_URL` setting
+- Add a `.github/claude-review.md` to skip whole review categories (e.g. "skip design suggestions") — fewer relevant findings means fewer tokens spent reasoning about them
+- The smart file inclusion and structural signatures features already save an estimated 40–60% of file content tokens compared to sending full source for every file
 
 ## Optional: require review before merge
 

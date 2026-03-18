@@ -168,6 +168,102 @@ The review follows a 12-step pipeline:
 
 If the review returns 0 comments on a PR with 150+ additions, a second-pass review is triggered with a diff-only prompt to catch anything missed.
 
+```
+PR triggered
+     │
+     ▼
+Fetch all changed files from GitHub API
+(filename, status, patch, changes, additions, deletions)
+     │
+     ├─ removed files ──► dropped everywhere
+     │
+     ▼
+Compute: reviewable_count, total_changes
+     │
+     ├─ reviewable_count == 0 ──► "deletions only" early exit
+     │
+     ▼
+┌─────────────────────────────────────────────────────┐
+│  use_map_reduce = files >= 8  OR  changes >= 1500   │
+└─────────────────────────────────────────────────────┘
+          │                          │
+         NO                         YES
+          │                          │
+          ▼                          ▼
+   Single Claude call          Group files into batches
+   budget: 180k chars          (by directory, max 8/batch)
+          │                          │
+          │                    ┌─────┴──────┐
+          │                    │  Per batch  │  (up to 5 parallel)
+          │                    │  budget:    │
+          │                    │  120k chars │
+          │                    └─────┬──────┘
+          │                          │
+          └──────────┬───────────────┘
+                     │
+                     ▼
+           Per-file content decision (same logic both paths):
+           ┌──────────────────────────────────────────────┐
+           │  changes > 800?                              │
+           │    YES → diff only (patch)                   │
+           │    NO  → fetch full source from contents API │
+           │          → smart file block:                 │
+           │            · file ≤ threshold lines?         │
+           │              full source + patch             │
+           │            · file > threshold lines?         │
+           │              imports + ±context lines + patch│
+           │          → if block > budget → fallback to   │
+           │            diff only                         │
+           │          → still > budget → skip             │
+           └──────────────────────────────────────────────┘
+                     │
+                     ▼
+           Context fetched alongside files:
+           · repo_context  (configs: package.json, pyproject, etc.)
+           · repo_docs     (README, CONTRIBUTING, etc.)
+           · guidelines    (CLAUDE_REVIEW_GUIDELINES.md etc.)
+           · linter_config (eslint, prettier, ruff, etc.)
+           · repo_tree     (full file tree)
+           · sibling_files (other files in same dirs, unmodified)
+           · imported_files (local modules imported by changed files)
+           · related_context (test files, build configs for changed files)
+                     │
+          ┌──────────┴───────────────┐
+         NO                         YES (map-reduce)
+          │                          │
+          ▼                          ▼
+   → 1 Claude call            MAP: N Claude calls (parallel)
+     all files + context      each batch: its files + context
+          │                   (sibling/import/related per batch)
+          │                          │
+          │                          ▼
+          │                   REDUCE: 1 Claude call
+          │                   input: all batch results +
+          │                          all diffs (150k char budget)
+          │                   output: deduplicated, validated,
+          │                           + new cross-file comments
+          │                          │
+          │                    reduce failed? → concat all batch
+          │                    comments as fallback
+          │                          │
+          └──────────┬───────────────┘
+                     │
+                     ▼
+           Filter comments to valid diff lines only
+                     │
+          ┌──────────┴──────────┐
+         NO (single)           YES (map-reduce)
+          │                     └──► done
+          ▼
+   Zero comments AND additions >= threshold?
+     YES → second-pass retry with stricter prompt
+           (diff-only, no full source)
+     NO  → done
+                     │
+                     ▼
+           Post review to GitHub
+```
+
 ## Large PR support (map-reduce)
 
 For PRs with **8+ files** or **1500+ total changes**, the reviewer automatically activates a map-reduce pipeline instead of the single-pass review:

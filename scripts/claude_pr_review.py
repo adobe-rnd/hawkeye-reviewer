@@ -176,24 +176,6 @@ def set_commit_status(owner: str, repo: str, sha: str, state: str, description: 
 # Placeholder comment (post → edit in-place)
 # ---------------------------------------------------------------------------
 
-PLACEHOLDER_BODY = (
-    f'<h2><img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle"> '
-    f"Reviewing your PR...</h2>\n\n"
-    "\u23f3 Claude is analyzing your changes. "
-    "A detailed review with inline comments will appear here shortly."
-)
-
-
-def post_placeholder_comment(owner: str, repo: str, pr_number: int, token: str) -> int:
-    """Post a placeholder comment and return the comment ID."""
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-    result = github_post(url, token, {"body": PLACEHOLDER_BODY})
-    if result["status"] >= 400:
-        raise RuntimeError(f"Failed to post placeholder: {result['body']}")
-    print("Placeholder comment posted.", file=sys.stderr)
-    return result["body"]["id"]
-
-
 def edit_comment(owner: str, repo: str, comment_id: int, body: str, token: str) -> None:
     """Edit an existing issue comment in-place."""
     url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/comments/{comment_id}"
@@ -2626,8 +2608,6 @@ def main() -> None:
 
     placeholder_id_str = os.environ.get("PLACEHOLDER_COMMENT_ID", "")
     placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
-    if not placeholder_id:
-        placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
 
     logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
     footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'

@@ -26,42 +26,24 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 - **Draft PR aware** — skips draft PRs to avoid wasting API calls
 - **Zero dependencies** — uses only Python's standard library (no `pip install`)
 
+## How it works
+
+The bot runs as a **standalone webhook server** (`webhook_server.py`) that receives GitHub webhooks directly and triggers the review script as a subprocess.
+
+1. GitHub sends a webhook event (PR opened, `/claude-review` comment) to the server
+2. The server validates the HMAC signature, generates a GitHub App installation token, posts a placeholder comment, and queues the review
+3. `claude_pr_review.py` assembles the prompt, calls Claude via Bedrock, and posts inline review comments
+
 ## Setup
 
-### 1. Secrets and variables
+### 1. GitHub App
 
-`CLAUDE_REVIEWER_APP_PRIVATE_KEY` should be set as an **organization-level** secret so it's available to all repos automatically (**Settings > Secrets and variables > Actions** at the org level).
+Create a GitHub App (**GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**):
 
-The remaining secrets can be set at the org or repo level:
-
-| Secret | Level | Required | Description |
-|--------|-------|----------|-------------|
-| `CLAUDE_REVIEWER_APP_PRIVATE_KEY` | Org | Yes | The GitHub App's private key (`.pem` contents) |
-| `CLAUDE_API_URL` | Org or Repo | Yes | Bedrock converse endpoint URL (see example below) |
-| `CLAUDE_API_TOKEN` | Org or Repo | Yes | Bearer token for the Bedrock API |
-
-Example `CLAUDE_API_URL`:
-
-```
-https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
-```
-
-### 2. GitHub App
-
-The action uses a GitHub App for its bot identity. You can use the shared App (ID `2914873`) if you have access to its private key, or create your own.
-
-**Option A: Use the shared App**
-
-Ask your team lead for the private key (`.pem` file) and install the App on your repository.
-
-**Option B: Create your own App**
-
-1. Go to **GitHub** > **Settings** > **Developer settings** > **GitHub Apps** > **New GitHub App**
-2. Fill in:
-   - **Name:** Any unique name (e.g. "Claude PR Reviewer - YourTeam")
-   - **Homepage URL:** Your repo URL
-   - **Webhook:** Uncheck "Active" (not needed)
-   - **Permissions:**
+- **Name:** Any unique name (e.g. "Claude PR Reviewer")
+- **Homepage URL:** Your repo URL
+- **Webhook:** Active ✓, URL: `https://your-server/webhook`, Secret: `openssl rand -hex 32`
+- **Permissions:**
 
 | Permission | Access | Why |
 |------------|--------|-----|
@@ -69,62 +51,70 @@ Ask your team lead for the private key (`.pem` file) and install the App on your
 | Pull requests | Read & Write | Post review comments |
 | Issues | Read & Write | Post summary comments |
 | Commit statuses | Read & Write | Set the merge gate status |
+| Variables | Read | Read per-repo Claude credentials |
 
-3. Click **Create GitHub App** and note the **App ID** from the settings page
-4. Scroll to **Private keys** > **Generate a private key** — saves a `.pem` file
-5. Go to **Install App** (left sidebar) and install it on your org/repos
-6. Store the `.pem` contents as the `CLAUDE_REVIEWER_APP_PRIVATE_KEY` secret
-7. Pass your App ID via the `app-id` input in your workflow:
+- **Subscribe to events:** Pull requests, Issue comments
 
-```yaml
-- uses: adobe-rnd/claude-pr-reviewer@v1
-  with:
-    app-id: 'YOUR_APP_ID'
-    app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
-    claude-api-url: ${{ secrets.CLAUDE_API_URL }}
-    claude-api-token: ${{ secrets.CLAUDE_API_TOKEN }}
+Click **Create GitHub App**, note the **App ID**, generate and download a **private key** (`.pem` file), then install the app on your org/repos.
+
+### 2. Server
+
+Run the webhook server with these environment variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_APP_ID` | Yes | GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | Yes | GitHub App private key (`.pem` contents) |
+| `WEBHOOK_SECRET` | Yes | Webhook secret (must match GitHub App settings) |
+| `SERVER_PRIVATE_KEY` | Yes | RSA-4096 private key for decrypting per-repo Claude credentials |
+| `CLAUDE_API_URL` | No | Server-wide fallback Bedrock endpoint |
+| `CLAUDE_API_TOKEN` | No | Server-wide fallback Bedrock token |
+
+Generate `SERVER_PRIVATE_KEY` once and store it permanently:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096
 ```
 
-### 3. Workflow file
+Start the server:
 
-Create `.github/workflows/ai-pr-review.yml`:
-
-```yaml
-name: AI PR Review (Claude via Bedrock)
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  ai_pr_review:
-    runs-on: ubuntu-latest
-    if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '/claude-review') &&
-       github.event.comment.author_association != 'NONE')
-    steps:
-      - name: Claude Bedrock PR Review
-        uses: adobe-rnd/claude-pr-reviewer@v1
-        with:
-          app-private-key: ${{ secrets.CLAUDE_REVIEWER_APP_PRIVATE_KEY }}
-          claude-api-url: ${{ secrets.CLAUDE_API_URL }}
-          claude-api-token: ${{ secrets.CLAUDE_API_TOKEN }}
+```bash
+python3 scripts/webhook_server.py
 ```
 
-That's it. The action handles everything else.
+The server exposes:
+- `POST /webhook` — receives GitHub webhook events
+- `GET /health` — health check
+- `GET /public-key` — serves the RSA public key for encrypting per-repo tokens
+
+### 3. Per-repo Claude credentials
+
+Each team encrypts their own Claude API token locally and stores the encrypted blob as GitHub repo variables. The server decrypts it at review time using `SERVER_PRIVATE_KEY`.
+
+```bash
+python3 scripts/encrypt_token.py \
+  --server https://your-server \
+  --token "Bearer YOUR_BEDROCK_TOKEN"
+```
+
+Then set in the repo → **Settings → Secrets and variables → Actions → Variables**:
+- `CLAUDE_REVIEWER_API_URL` = your Bedrock endpoint URL
+- `CLAUDE_REVIEWER_API_TOKEN` = encrypted blob from above
+
+Example `CLAUDE_REVIEWER_API_URL`:
+
+```
+https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
+```
 
 ## Architecture
 
-The reviewer is a single Python script (~2600 lines, zero dependencies) that runs as a composite GitHub Action. It communicates with two external systems:
+The reviewer consists of two scripts:
+
+- **`webhook_server.py`** — HTTP server that receives GitHub webhooks, handles GitHub App JWT authentication, posts placeholder comments, and dispatches reviews to a thread pool
+- **`claude_pr_review.py`** — the review engine: fetches PR data, assembles the prompt, calls Claude, and posts the results back to GitHub
+
+Both scripts communicate with two external systems:
 
 - **GitHub API** — reads PR metadata, changed files, file contents, config files, and existing comments; writes summary comments, inline review comments, and commit statuses
 - **Amazon Bedrock** — sends the assembled prompt to Claude via the Converse API and parses the JSON response
@@ -135,7 +125,7 @@ The reviewer is a single Python script (~2600 lines, zero dependencies) that run
 |-------|----------|
 | PR opened / reopened / ready for review | Posts a placeholder comment, runs a full review, sets commit status to `success` |
 | New commits pushed (`synchronize`) | Sets commit status to `pending` (invalidates previous review). No new review runs automatically. |
-| `/claude-review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. Only works for users with repo association. |
+| `/claude-review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
 
 ### Review output
 
@@ -153,18 +143,19 @@ Every comment includes the reviewer version (e.g. `v1.3.0`) and an AI-generated 
 
 The review follows a 12-step pipeline:
 
-1. **PR event triggered** — GitHub webhook fires on open/reopen/ready/comment
-2. **Generate GitHub App token** — secure authentication via `actions/create-github-app-token`
-3. **Post placeholder comment** — immediate feedback via curl (no Python needed)
-4. **Set commit status to pending** — merge gate activated
-5. **Fetch PR metadata** — title, description, head SHA
-6. **Fetch changed files** — paginated diffs and file statuses
-7. **Build context layers** — repo configs, docs, guidelines, tree, siblings, imports, linter configs
-8. **Build prompt** — assemble all context + changed files (up to ~219K characters)
-9. **Call Claude via Bedrock** — Converse API, 180s timeout, bearer token auth
-10. **Parse JSON response** — extract summary + comments array
-11. **Filter and deduplicate** — validate against diff lines, remove duplicates
-12. **Post review to GitHub** — summary comment, inline comments, commit status
+1. **Webhook received** — GitHub sends event on PR open/reopen/ready/comment
+2. **Validate signature** — HMAC-SHA256 verification against webhook secret
+3. **Generate GitHub App token** — JWT signed with RSA private key, exchanged for an installation access token
+4. **Post placeholder comment** — immediate feedback while Claude analyzes
+5. **Set commit status to pending** — merge gate activated
+6. **Fetch PR metadata** — title, description, head SHA
+7. **Fetch changed files** — paginated diffs and file statuses
+8. **Build context layers** — repo configs, docs, guidelines, tree, siblings, imports, linter configs
+9. **Build prompt** — assemble all context + changed files (up to ~180K characters)
+10. **Call Claude via Bedrock** — Converse API, 180s timeout, bearer token auth
+11. **Parse JSON response** — extract summary + comments array
+12. **Filter and deduplicate** — validate against diff lines, remove duplicates
+13. **Post review to GitHub** — summary comment, inline comments, commit status
 
 If the review returns 0 comments on a PR with 150+ additions, a second-pass review is triggered with a diff-only prompt to catch anything missed.
 
@@ -494,7 +485,7 @@ Costs scale with PR size and model choice. Latency is dominated by the Claude AP
 
 ### Reducing cost
 
-- Use a smaller/faster model (e.g. Claude Haiku) via the `CLAUDE_API_URL` setting
+- Use a smaller/faster model (e.g. Claude Haiku) via the `CLAUDE_REVIEWER_API_URL` repo variable
 - Add a `.github/claude-review.md` to skip whole review categories (e.g. "skip design suggestions") — fewer relevant findings means fewer tokens spent reasoning about them
 - The smart file inclusion and structural signatures features already save an estimated 40–60% of file content tokens compared to sending full source for every file
 
@@ -510,21 +501,10 @@ When new commits are pushed, the status is automatically set to `pending`, requi
 
 ## Supported models
 
-The action auto-detects the Claude model from the Bedrock endpoint URL and displays it in the review footer:
+The reviewer auto-detects the Claude model from the Bedrock endpoint URL and displays it in the review footer:
 
 - Claude Opus 4.6, 4.5, 4
 - Claude Sonnet 4.6, 4.5, 4
 - Claude Haiku 4.6, 4.5, 4
 - Claude 3.7 Sonnet, 3.5 Sonnet, 3.5 Haiku
 - Claude 3 Opus, 3 Sonnet, 3 Haiku
-
-## Action inputs
-
-| Input | Required | Description |
-|-------|----------|-------------|
-| `app-id` | No | GitHub App ID (defaults to `2914873`) |
-| `app-private-key` | Yes | GitHub App private key (`.pem` contents) |
-| `claude-api-url` | No* | Bedrock converse endpoint URL |
-| `claude-api-token` | No* | Bedrock API bearer token |
-
-*`claude-api-url` and `claude-api-token` are not required for `synchronize` events (which only set a pending status). For all other events, both are required.

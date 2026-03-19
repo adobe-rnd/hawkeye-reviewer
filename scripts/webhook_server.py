@@ -1,30 +1,21 @@
 #!/usr/bin/env python3
-"""Standalone webhook server for Claude PR Reviewer.
+"""Webhook server for Claude PR Reviewer.
 
-Receives GitHub webhooks and triggers claude_pr_review.py, replacing the need
-for GitHub Actions. Supports multiple GitHub environments (github.com orgs and
-GitHub Enterprise Server) from a single process.
+Receives GitHub webhooks and triggers claude_pr_review.py as a subprocess.
+Supports multiple GitHub environments (github.com orgs and GitHub Enterprise
+Server) from a single process.
 
 Zero pip dependencies — uses only the Python standard library + openssl binary
 (available on any Linux/Mac system).
 
 Usage:
-  # Single-environment mode (env vars):
   export GITHUB_APP_ID=12345
   export GITHUB_APP_PRIVATE_KEY_PATH=/secrets/app.pem
   export WEBHOOK_SECRET=mysecret
-  export CLAUDE_API_URL=https://...
-  export CLAUDE_API_TOKEN=Bearer ...
-  python3 scripts/webhook_server.py
-
-  # Multi-environment mode (config file):
-  export CONFIG_FILE=/config/config.json
   python3 scripts/webhook_server.py
 
   # Auth smoke test (prints token expiry, no review triggered):
   python3 scripts/webhook_server.py --test-auth
-
-See config.example.json for the full configuration schema.
 """
 
 import base64
@@ -39,7 +30,6 @@ import sys
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -91,8 +81,8 @@ DEFAULT_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "claude_pr_review.
 def _load_single_env_config() -> dict[str, Any]:
     """Build a single-environment config from flat env vars.
 
-    PAT mode: set GITHUB_TOKEN instead of GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY_PATH.
-    App mode: set GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY_PATH (production).
+    Normal mode: set GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY (or _PATH).
+    Local testing: set GITHUB_TOKEN to bypass JWT auth entirely.
     """
     using_pat = bool(os.environ.get("GITHUB_TOKEN"))
     # When SERVER_PRIVATE_KEY is set, per-repo GitHub variables supply Claude
@@ -300,7 +290,7 @@ def get_cached_installation_token(
     """Return a cached installation token, refreshing if within 2 min of expiry.
 
     installation_id comes from the webhook payload (payload["installation"]["id"]).
-    If GITHUB_TOKEN is set, it is used directly (PAT mode for local testing).
+    If GITHUB_TOKEN is set, it is used directly (local testing shortcut).
     """
     if os.environ.get("GITHUB_TOKEN"):
         return os.environ["GITHUB_TOKEN"]
@@ -525,8 +515,7 @@ def _resolve_claude_credentials(
     Lookup order (most specific wins):
       1. GitHub repo Actions variables  CLAUDE_REVIEWER_API_URL + CLAUDE_REVIEWER_API_TOKEN
          (set by the repo team; token value must be encrypted with encrypt_token.py)
-      2. Per-org env vars  CLAUDE_API_URL_<OWNER> / CLAUDE_API_TOKEN_<OWNER>
-      3. Server default from env_cfg (CLAUDE_API_URL / CLAUDE_API_TOKEN)
+      2. Server default from env_cfg (CLAUDE_API_URL / CLAUDE_API_TOKEN)
     """
     # 1. Per-repo GitHub variables
     if os.environ.get("SERVER_PRIVATE_KEY"):
@@ -546,14 +535,7 @@ def _resolve_claude_credentials(
         except Exception as exc:
             warn(f"Could not read/decrypt repo variables for {owner}/{repo}: {exc}")
 
-    # 2. Per-org env vars
-    key = owner.upper().replace("-", "_").replace(".", "_")
-    org_url = os.environ.get(f"CLAUDE_API_URL_{key}")
-    org_token = os.environ.get(f"CLAUDE_API_TOKEN_{key}")
-    if org_url and org_token:
-        return org_url, org_token
-
-    # 3. Server default
+    # 2. Server default
     return env_cfg.get("claude_api_url", ""), env_cfg.get("claude_api_token", "")
 
 
@@ -896,7 +878,8 @@ def run_test_auth(cfg: dict) -> None:
         print(f"\n=== Testing auth for env: {env_name} ===")
         print(f"  GitHub API URL : {env_cfg['github_api_url']}")
         print(f"  App ID         : {env_cfg['github_app_id']}")
-        print(f"  PEM path       : {env_cfg['github_app_private_key_path']}")
+        pem_display = env_cfg["github_app_private_key_path"] or "(using GITHUB_APP_PRIVATE_KEY env var)"
+        print(f"  PEM path       : {pem_display}")
         try:
             jwt = generate_github_app_jwt(
                 env_cfg["github_app_id"],

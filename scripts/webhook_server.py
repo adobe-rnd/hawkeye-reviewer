@@ -99,12 +99,23 @@ def _load_single_env_config() -> dict[str, Any]:
     # credentials, so a global CLAUDE_API_URL/CLAUDE_API_TOKEN is optional
     # (they become a server-wide fallback rather than a hard requirement).
     has_per_repo_creds = bool(os.environ.get("SERVER_PRIVATE_KEY"))
+    # The private key can be supplied as a file path OR as PEM contents in an
+    # env var (GITHUB_APP_PRIVATE_KEY) — either satisfies the requirement.
+    has_private_key = bool(
+        os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH") or
+        os.environ.get("GITHUB_APP_PRIVATE_KEY")
+    )
     if using_pat:
         required: tuple[str, ...] = ("WEBHOOK_SECRET",)
         if not has_per_repo_creds:
             required += ("CLAUDE_API_URL", "CLAUDE_API_TOKEN")
     else:
-        required = ("GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY_PATH", "WEBHOOK_SECRET")
+        required = ("GITHUB_APP_ID", "WEBHOOK_SECRET")
+        if not has_private_key:
+            raise ValueError(
+                "Missing required env var for single-env app mode: "
+                "set GITHUB_APP_PRIVATE_KEY (PEM contents) or GITHUB_APP_PRIVATE_KEY_PATH"
+            )
         if not has_per_repo_creds:
             required += ("CLAUDE_API_URL", "CLAUDE_API_TOKEN")
     missing = [k for k in required if not os.environ.get(k)]
@@ -115,8 +126,8 @@ def _load_single_env_config() -> dict[str, Any]:
         "github_app_id": os.environ.get("GITHUB_APP_ID"),
         "github_app_private_key_path": os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH"),
         "webhook_secret": os.environ["WEBHOOK_SECRET"],
-        "claude_api_url": os.environ["CLAUDE_API_URL"],
-        "claude_api_token": os.environ["CLAUDE_API_TOKEN"],
+        "claude_api_url": os.environ.get("CLAUDE_API_URL", ""),
+        "claude_api_token": os.environ.get("CLAUDE_API_TOKEN", ""),
         "ssl_ca_bundle": os.environ.get("SSL_CA_BUNDLE"),
     }
 
@@ -598,6 +609,25 @@ def invoke_review(
         env["SSL_CERT_FILE"] = env_cfg["ssl_ca_bundle"]
         env["REQUESTS_CA_BUNDLE"] = env_cfg["ssl_ca_bundle"]
 
+    def _update_placeholder_error(message: str) -> None:
+        if not placeholder_id:
+            return
+        try:
+            err_body = (
+                "<h2>❌ Claude PR Reviewer — review failed</h2>\n\n"
+                f"{message}\n\n"
+                "Type `/claude-review` in a comment to retry."
+            )
+            _github_request(
+                "PATCH",
+                f"{env_cfg['github_api_url']}/repos/{owner}/{repo}/issues/comments/{placeholder_id}",
+                installation_token,
+                {"body": err_body},
+                ca_bundle=env_cfg.get("ssl_ca_bundle"),
+            )
+        except Exception as patch_exc:
+            error(f"Failed to update placeholder with error: {patch_exc}", env=env_name, repo=repo_ctx)
+
     try:
         result = subprocess.run(
             [sys.executable, script_path, owner, repo, str(pr_number)],
@@ -606,12 +636,15 @@ def invoke_review(
         )
         if result.returncode != 0:
             warn(f"Review subprocess exited {result.returncode}", env=env_name, repo=repo_ctx)
+            _update_placeholder_error(f"The review script exited with code `{result.returncode}`.")
         else:
             info("Review complete", env=env_name, repo=repo_ctx)
     except subprocess.TimeoutExpired:
         error("Review subprocess timed out after 600s", env=env_name, repo=repo_ctx)
+        _update_placeholder_error("The review timed out after 10 minutes.")
     except Exception as exc:
         error(f"Review subprocess error: {exc}", env=env_name, repo=repo_ctx)
+        _update_placeholder_error(f"Unexpected error: `{exc}`.")
 
 
 # ---------------------------------------------------------------------------

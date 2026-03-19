@@ -342,44 +342,13 @@ Every review follows the same pipeline:
 
 ### Single-pass vs map-reduce
 
-```
-┌─────────────────────────────────────────────────────┐
-│  use_map_reduce = files >= 8  OR  changes >= 1500   │
-└─────────────────────────────────────────────────────┘
-          │                          │
-         NO                         YES
-          │                          │
-          ▼                          ▼
-   Single Claude call          Group files into batches
-   budget: 180k chars          (by directory, max 8/batch)
-          │                          │
-          │                    ┌─────┴──────┐
-          │                    │  Per batch  │  (up to 5 parallel)
-          │                    │  120k chars │
-          │                    └─────┬──────┘
-          │                          │
-          │                   REDUCE: 1 Claude call
-          │                   (dedup, validate, cross-file)
-          │                          │
-          └──────────┬───────────────┘
-                     │
-                     ▼
-           Filter to valid diff lines
-                     │
-          ┌──────────┴──────────────────┐
-    map-reduce                       single-pass
-       done                              │
-                              0 comments AND >= 150 additions?
-                                YES → second-pass (diff-only)
-                                NO  → done
-                                         │
-                                         ▼
-                                Post review to GitHub
-```
+<p align="center">
+  <img src="diagrams/04_single_vs_map_reduce.png" alt="Single-pass vs map-reduce">
+</p>
 
 **Map phase** — files are grouped by directory affinity (same-dir files stay together) and reviewed in parallel, each batch with its own sibling files, imports, and local context.
 
-**Reduce phase** — a consolidation pass deduplicates comments, validates suggestions, and surfaces cross-file issues (broken contracts, mismatched interfaces, missing test updates). Shared context (repo configs, docs, tree) is computed once and reused across all batches.
+**Reduce phase** — a consolidation pass deduplicates comments, validates suggestions, and surfaces cross-file issues (broken contracts, mismatched interfaces, missing test updates). If the reduce call fails, all batch comments are concatenated directly as a fallback.
 
 **Failure handling** — if some batches fail, the review is posted as partial with a warning in the summary and a `failure` status to block merges. Deletions-only PRs exit early with a "no reviewable files" status.
 

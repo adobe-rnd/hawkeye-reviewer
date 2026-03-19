@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Webhook server for HawkEye Reviewer.
 
-Receives GitHub webhooks and triggers claude_pr_review.py as a subprocess.
+Receives GitHub webhooks and triggers hawkeye_pr_review.py as a subprocess.
 Supports multiple GitHub environments (github.com orgs and GitHub Enterprise
 Server) from a single process.
 
@@ -75,7 +75,7 @@ def warn(msg: str, env: str = "", repo: str = "") -> None:
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_MAX_CONCURRENT = 4
-DEFAULT_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "claude_pr_review.py")
+DEFAULT_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), "hawkeye_pr_review.py")
 
 
 def _load_single_env_config() -> dict[str, Any]:
@@ -116,8 +116,8 @@ def _load_single_env_config() -> dict[str, Any]:
         "github_app_id": os.environ.get("GITHUB_APP_ID"),
         "github_app_private_key_path": os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH"),
         "webhook_secret": os.environ["WEBHOOK_SECRET"],
-        "claude_api_url": os.environ.get("CLAUDE_API_URL", ""),
-        "claude_api_token": os.environ.get("CLAUDE_API_TOKEN", ""),
+        "api_url": os.environ.get("CLAUDE_API_URL", ""),
+        "api_token": os.environ.get("CLAUDE_API_TOKEN", ""),
         "ssl_ca_bundle": os.environ.get("SSL_CA_BUNDLE"),
     }
 
@@ -348,7 +348,7 @@ def post_placeholder_comment(
 ) -> int:
     """Post a 'Reviewing…' placeholder comment and return its ID."""
     url = f"{github_api_url}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-    # Derive avatar base URL the same way claude_pr_review.py does
+    # Derive avatar base URL the same way hawkeye_pr_review.py does
     github_base = github_api_url.replace("/api/v3", "").replace("api.", "")
     avatar = f"{github_base}/anthropics.png?size=36"
     body = (
@@ -507,7 +507,7 @@ def read_repo_variables(
 # Review invocation
 # ---------------------------------------------------------------------------
 
-def _resolve_claude_credentials(
+def _resolve_api_credentials(
     env_cfg: dict,
     owner: str,
     repo: str,
@@ -539,7 +539,7 @@ def _resolve_claude_credentials(
             warn(f"Could not read/decrypt repo variables for {owner}/{repo}: {exc}")
 
     # 2. Server default
-    return env_cfg.get("claude_api_url", ""), env_cfg.get("claude_api_token", "")
+    return env_cfg.get("api_url", ""), env_cfg.get("api_token", "")
 
 
 def invoke_review(
@@ -552,14 +552,14 @@ def invoke_review(
     placeholder_id: int,
     installation_token: str,
 ) -> None:
-    """Run claude_pr_review.py as a subprocess for a single PR."""
+    """Run hawkeye_pr_review.py as a subprocess for a single PR."""
     repo_ctx = f"{owner}/{repo}#{pr_number}"
     info("Starting review subprocess", env=env_name, repo=repo_ctx)
-    claude_api_url, claude_api_token = _resolve_claude_credentials(
+    api_url, api_token = _resolve_api_credentials(
         env_cfg, owner, repo, installation_token
     )
 
-    if not claude_api_url or not claude_api_token:
+    if not api_url or not api_token:
         error("No Claude credentials configured for this repo — skipping review", env=env_name, repo=repo_ctx)
         if placeholder_id:
             try:
@@ -586,8 +586,8 @@ def invoke_review(
         **os.environ,
         "GITHUB_TOKEN": installation_token,
         "GITHUB_API_URL": env_cfg["github_api_url"],
-        "CLAUDE_API_URL": claude_api_url,
-        "CLAUDE_API_TOKEN": claude_api_token,
+        "CLAUDE_API_URL": api_url,
+        "CLAUDE_API_TOKEN": api_token,
         "PLACEHOLDER_COMMENT_ID": str(placeholder_id),
     }
     if env_cfg.get("ssl_ca_bundle"):

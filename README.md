@@ -32,7 +32,7 @@ The bot runs as a **standalone webhook server** (`webhook_server.py`) that recei
 
 1. GitHub sends a webhook event (PR opened, `/hawkeye-review` comment) to the server
 2. The server validates the HMAC signature, generates a GitHub App installation token, posts a placeholder comment, and queues the review
-3. `claude_pr_review.py` assembles the prompt, calls Claude via Bedrock, and posts inline review comments
+3. `hawkeye_pr_review.py` assembles the prompt, calls Claude via Bedrock, and posts inline review comments
 
 ## Setup
 
@@ -112,7 +112,7 @@ https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet
 The reviewer consists of two scripts:
 
 - **`webhook_server.py`** — HTTP server that receives GitHub webhooks, handles GitHub App JWT authentication, posts placeholder comments, and dispatches reviews to a thread pool
-- **`claude_pr_review.py`** — the review engine: fetches PR data, assembles the prompt, calls Claude, and posts the results back to GitHub
+- **`hawkeye_pr_review.py`** — the review engine: fetches PR data, assembles the prompt, calls Claude, and posts the results back to GitHub
 
 Both scripts communicate with two external systems:
 
@@ -212,7 +212,7 @@ Compute: reviewable_count, total_changes
            Context fetched alongside files:
            · repo_context  (configs: package.json, pyproject, etc.)
            · repo_docs     (README, CONTRIBUTING, etc.)
-           · guidelines    (CLAUDE_REVIEW_GUIDELINES.md etc.)
+           · guidelines    (HAWKEYE_REVIEW_GUIDELINES.md etc.)
            · linter_config (eslint, prettier, ruff, etc.)
            · repo_tree     (full file tree)
            · sibling_files (other files in same dirs, unmodified)

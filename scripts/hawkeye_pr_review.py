@@ -19,7 +19,7 @@ from typing import Any
 
 GITHUB_API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 _github_base = GITHUB_API.replace("/api/v3", "").replace("api.", "")
-CLAUDE_AVATAR = f"{_github_base}/anthropics.png?size=36"
+BOT_AVATAR = f"{_github_base}/anthropics.png?size=36"
 
 STATUS_CONTEXT = "HawkEye Review"
 
@@ -1607,7 +1607,7 @@ def format_summary_comment(
 ) -> str:
     parts: list[str] = []
 
-    logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
+    logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
 
     header = f"<h2>{logo} Pull request overview</h2>"
     overview = summary.get("overview", "")
@@ -1652,7 +1652,7 @@ def format_summary_comment(
             "\n---\n\u2705 No issues found — looks good!"
         )
 
-    footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
+    footer_logo = f'<img src="{BOT_AVATAR}" width="13" height="13" align="absmiddle">'
     mode_text = f" | {review_mode}" if review_mode else ""
     parts.append(
         f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock{mode_text}"
@@ -2573,7 +2573,7 @@ def _review_map_reduce_inner(
 def main() -> None:
     if len(sys.argv) < 4:
         print(
-            "Usage: claude_pr_review.py <owner> <repo> <pr_number>",
+            "Usage: hawkeye_pr_review.py <owner> <repo> <pr_number>",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -2609,8 +2609,8 @@ def main() -> None:
     placeholder_id_str = os.environ.get("PLACEHOLDER_COMMENT_ID", "")
     placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
 
-    logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
-    footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
+    logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
+    footer_logo = f'<img src="{BOT_AVATAR}" width="13" height="13" align="absmiddle">'
 
     try:
         files = get_changed_files(owner, repo, pr_number, github_token)

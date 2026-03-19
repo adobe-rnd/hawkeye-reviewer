@@ -12,7 +12,8 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 
 - [Features](#-features)
 - [How It Works](#-how-it-works)
-- [Setup](#-setup)
+- [Enroll Your Repo](#-enroll-your-repo)
+- [Administrator Setup](#-administrator-setup)
 - [What HawkEye Reviews](#-what-hawkeye-reviews)
 - [Context & Intelligence](#-context--intelligence)
 - [Review Pipeline](#-review-pipeline)
@@ -82,9 +83,50 @@ Every comment includes the reviewer version (e.g. `v1.4.0`) and an AI-generated 
 
 ---
 
-## 🚀 Setup
+## 📥 Enroll Your Repo
 
-### 1. Create a GitHub App
+> **Already have HawkEye deployed?** This is all you need — takes about 5 minutes.
+
+### Step 1 — Install the GitHub App
+
+Ask your HawkEye administrator to install the **HawkEye Reviewer** GitHub App on your repository (or organization).
+
+### Step 2 — Encrypt your Bedrock token
+
+Run this locally (clone the repo first if needed):
+
+```bash
+python3 scripts/encrypt_token.py --token "YOUR_BEDROCK_TOKEN"
+```
+
+This outputs an encrypted blob that only the HawkEye server can decrypt. Your raw token never leaves your machine.
+
+### Step 3 — Add two repo variables
+
+Go to your repo → **Settings → Secrets and variables → Actions → Variables** and add:
+
+| Variable | Value |
+|----------|-------|
+| `HAWKEYE_CLAUDE_API_URL` | Your Bedrock endpoint URL |
+| `HAWKEYE_CLAUDE_BLOB` | The encrypted blob from Step 2 |
+
+Example `HAWKEYE_CLAUDE_API_URL`:
+
+```
+https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
+```
+
+That's it. Open a pull request and HawkEye will automatically post a review.
+
+> **Optional:** Create `.github/hawkeye-review.md` in your repo with project-specific instructions for the reviewer. See [Custom review guidelines](#custom-review-guidelines).
+
+---
+
+## 🛠️ Administrator Setup
+
+> **One-time setup** for the person deploying and maintaining the HawkEye server.
+
+### 1. Create the GitHub App
 
 Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**:
 
@@ -104,89 +146,55 @@ Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHu
 
 **Subscribed events:** Pull requests, Issue comments
 
-After creating the app: note the **App ID**, generate and download a **private key** (`.pem`), then install the app on your org or repos.
+After creating the app: note the **App ID**, generate and download a **private key** (`.pem`), then install the app on your org or individual repos.
 
----
+### 2. Generate the server encryption key
 
-### 2. Configure the server
-
-Set the following environment variables before starting the server:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GITHUB_APP_ID` | ✅ | GitHub App ID |
-| `GITHUB_APP_PRIVATE_KEY` | ✅ | GitHub App private key (`.pem` file contents) |
-| `WEBHOOK_SECRET` | ✅ | Webhook secret (must match GitHub App settings) |
-| `SERVER_PRIVATE_KEY` | ☑️ * | RSA-4096 private key for decrypting per-repo Claude credentials |
-| `CLAUDE_API_URL` | ☑️ * | Server-wide fallback Bedrock endpoint |
-| `CLAUDE_API_TOKEN` | ☑️ * | Server-wide fallback Bedrock token |
-| `GITHUB_APP_SLUG` | ➕ | App slug (e.g. `hawkeye-reviewer`). Enables the Reviewers sidebar integration and "Re-request review" button |
-
-\* At least one credential source is required: `SERVER_PRIVATE_KEY` (per-repo encrypted credentials), `CLAUDE_API_URL` + `CLAUDE_API_TOKEN` (server-wide fallback), or both.
-
-> **Finding your app slug:** Go to your GitHub App's General settings page. The slug is the last segment of the public link URL (e.g. `https://github.com/apps/hawkeye-reviewer` → slug is `hawkeye-reviewer`).
-
-Generate `SERVER_PRIVATE_KEY` once and store it permanently:
+This key encrypts/decrypts per-repo Bedrock tokens. Generate it once and store it permanently (e.g. in Azure Key Vault or directly as an App Service env var):
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096
 ```
 
-Start the server:
+### 3. Deploy to Azure App Service
+
+**Startup command:**
 
 ```bash
 python3 scripts/webhook_server.py
 ```
 
-**Endpoints:**
+**Environment variables** — set these in **Configuration → Environment variables**:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_APP_ID` | ✅ | GitHub App ID (shown on the app's General settings page) |
+| `GITHUB_APP_PRIVATE_KEY` | ✅ | Contents of the `.pem` private key file |
+| `WEBHOOK_SECRET` | ✅ | Webhook secret you set when creating the app |
+| `SERVER_PRIVATE_KEY` | ✅ | RSA-4096 key generated above (for decrypting per-repo tokens) |
+| `GITHUB_APP_SLUG` | ➕ | App slug (e.g. `hawkeye-reviewer`) — enables the Reviewers sidebar and "Re-request review" button |
+| `CLAUDE_API_URL` | ➕ | Server-wide fallback Bedrock endpoint (if not using per-repo credentials) |
+| `CLAUDE_API_TOKEN` | ➕ | Server-wide fallback Bedrock token |
+
+> **Finding your app slug:** Open your GitHub App's General settings page. The slug is the last segment of the public link URL (e.g. `https://github.com/apps/hawkeye-reviewer` → slug is `hawkeye-reviewer`).
+
+**Other settings:**
+- **Port:** The server reads the `PORT` env var (defaults to `8080`). Azure sets this automatically.
+- **Health check:** Configure at `/health` in **Monitoring → Health check**
+
+**Server endpoints:**
 - `POST /webhook` — receives GitHub webhook events
 - `GET /health` — health check
-- `GET /public-key` — serves the RSA public key for encrypting per-repo tokens
+- `GET /public-key` — serves the RSA public key so teams can encrypt their tokens locally
 
----
+### 4. IP allow list (organizations with IP restrictions)
 
-### 3. Per-repo Claude credentials
-
-Each team encrypts their own Claude token locally and stores the encrypted blob as a GitHub repo variable. The server decrypts it at review time using `SERVER_PRIVATE_KEY`.
-
-```bash
-python3 scripts/encrypt_token.py --token "YOUR_BEDROCK_TOKEN"
-```
-
-Then set in **repo → Settings → Secrets and variables → Actions → Variables**:
-
-| Variable | Value |
-|----------|-------|
-| `HAWKEYE_CLAUDE_API_URL` | Your Bedrock endpoint URL |
-| `HAWKEYE_CLAUDE_BLOB` | Encrypted blob from the command above |
-
-Example endpoint URL:
-
-```
-https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
-```
-
----
-
-### 4. Deploy to Azure App Service
-
-| Setting | Value |
-|---------|-------|
-| **Startup command** | `python3 scripts/webhook_server.py` |
-| **Environment variables** | Set all variables above in **Configuration → Environment variables** |
-| **Port** | Reads `PORT` env var (defaults to `8080`). Azure sets this automatically. |
-| **Health check** | Configure at `/health` in **Monitoring → Health check** |
-
----
-
-### 5. IP allow list (organizations with IP restrictions)
-
-If your GitHub organization enforces an IP allow list, add your server's outbound IPs to the GitHub App:
+If your GitHub organization enforces an IP allow list (e.g. enterprise orgs), add the server's outbound IPs to the GitHub App:
 
 1. Go to your GitHub App → **Advanced** → **IP allow list**
 2. Add each outbound IP
 
-For Azure App Service, outbound IPs are listed under **Properties → Outbound IP addresses** and **Additional Outbound IP Addresses**. Add all of them — Azure may use any of these for outbound connections.
+For Azure App Service, outbound IPs are listed under **Properties → Outbound IP addresses** and **Additional Outbound IP Addresses**. Add all of them — Azure may route outbound traffic through any of these.
 
 ---
 

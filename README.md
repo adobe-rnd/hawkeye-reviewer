@@ -46,14 +46,15 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 
 ## ⚙️ How It Works
 
-HawkEye runs as a **standalone webhook server** (`webhook_server.py`) that receives GitHub events and triggers the review engine as a subprocess.
+HawkEye runs as a **standalone webhook server** that listens for GitHub events and triggers the review engine in a background thread.
 
 ```
 GitHub event  →  webhook_server.py  →  hawkeye_pr_review.py  →  GitHub API
-                  (auth, queue)         (prompt, Claude, post)
+                  validates + queues      builds prompt, calls
+                  posts placeholder       Claude, posts review
 ```
 
-**Two scripts, two external systems:**
+**Components:**
 
 | Component | Role |
 |-----------|------|
@@ -244,8 +245,8 @@ Pushing new commits does **not** reset the status — the result from the last r
 
 HawkEye assembles a layered context window so Claude understands your codebase — not just the diff.
 
-| Layer | Budget | Contents |
-|-------|--------|----------|
+| Layer | Cap | Contents |
+|-------|-----|----------|
 | PR information | ~2K | Title + description |
 | Repository context | 12K | `pyproject.toml`, `package.json`, `tsconfig.json`, `go.mod`, etc. |
 | Repository tree | 8K | Full directory listing (Git Trees API, noisy dirs excluded) |
@@ -259,13 +260,13 @@ HawkEye assembles a layered context window so Claude understands your codebase �
 
 ### Smart file inclusion
 
-For files over 200 lines, full source is replaced with a compact representation that preserves signal while cutting tokens:
+Sending every file in full would waste tokens on unchanged code. For files over 200 lines, HawkEye replaces the full source with a compact representation:
 
-- **Header + imports** (first 30 lines) for module-level context
-- **Expanded diff hunks** (40 lines of context around each changed region)
-- **Structural signatures** — `def`, `class`, `fn`, `struct`, `interface`, etc. from omitted sections, so Claude still sees the file's shape
+- **Header + imports** (first 30 lines) — module-level context
+- **Expanded diff hunks** — 40 lines of surrounding context around each changed region
+- **Structural signatures** — `def`, `class`, `fn`, `struct`, `interface`, etc. lines from skipped sections, so Claude still sees the file's shape
 
-If the expanded context covers >70% of the file anyway, full content is sent instead. Estimated savings: **40–60% of file content tokens**.
+If the expanded context already covers >70% of the file, the full source is sent instead. Estimated savings: **40–60% of file content tokens**.
 
 ### Repository structure
 
@@ -329,7 +330,7 @@ Every review follows the same pipeline:
 
 1. **Webhook received** — GitHub sends event on PR open/reopen/ready/comment
 2. **Validate signature** — HMAC-SHA256 against webhook secret
-3. **Generate installation token** — JWT signed with RSA private key, exchanged for a short-lived access token
+3. **Authenticate as GitHub App** — generate a short-lived installation token scoped to the target repo
 4. **Post placeholder comment** — immediate feedback while Claude analyzes
 5. **Fetch PR metadata** — title, description, head SHA
 6. **Fetch changed files** — paginated diffs and file statuses
@@ -356,27 +357,28 @@ Every review follows the same pipeline:
 
 ## 🔇 Noise Control
 
-HawkEye uses layered controls to keep the signal-to-noise ratio high.
+HawkEye uses four independent layers to keep the signal-to-noise ratio high.
 
-**Prompt constraints** (enforced in the system prompt):
-- **Diff-only scope** — comments only on lines added (`+`) in the diff; pre-existing code cannot be flagged
-- **No style/formatting** — minor preferences are explicitly excluded
-- **Linter compliance** — all suggestions must pass your configured linter rules
-- **Concise messages** — each comment is capped at 1–3 sentences
-- **Compatibility** — patterns incompatible with the project's declared runtime/frameworks are not suggested
+#### 1. Prompt constraints — Claude is instructed to:
+- Comment **only on added lines** (`+` in the diff) — pre-existing code cannot be flagged
+- Skip style and formatting preferences
+- Respect your linter rules — every suggestion must pass your configured linter
+- Keep each comment to 1–3 sentences
+- Avoid patterns incompatible with the project's declared runtime or frameworks
 
-**Post-response filtering** (always applied in code):
-- Comments on lines not present in the diff are dropped (catches hallucinated line numbers)
-- Comments matching an existing `(path, line, severity)` tuple are deduplicated
+#### 2. Post-response filtering — always runs in code, regardless of what Claude returned:
+- Comments on lines not present in the diff are **dropped** (guards against hallucinated line numbers)
+- Comments matching an existing `(path, line, severity)` tuple are **deduplicated** (re-reviews don't repeat old feedback)
 
-**Reduce-phase deduplication** (map-reduce only):
-- Cross-batch duplicates removed
-- False positives that look incorrect given full cross-file context are dropped
+#### 3. Reduce-phase deduplication — map-reduce only:
+- Duplicate comments across batches are collapsed into one
+- False positives that look wrong given full cross-file context are removed
 
-**Custom guidelines** (your escape hatch):
-- Use `.github/hawkeye-review.md` to suppress entire categories or add project-specific rules — these take precedence over everything else
+#### 4. Custom guidelines — your escape hatch:
+- Add `.github/hawkeye-review.md` to suppress entire categories or add project-specific rules
+- These instructions take precedence over all default behavior
 
-> HawkEye intentionally errs toward thoroughness over conservatism — it would rather surface a concern that turns out to be fine than miss a real bug. Noise is managed structurally, not by asking Claude to hold back. If the volume is too high, the main lever is `.github/hawkeye-review.md`.
+> **Philosophy:** HawkEye errs toward thoroughness over conservatism — it would rather surface a concern that turns out fine than miss a real bug. If comment volume is too high for your workflow, `.github/hawkeye-review.md` is the main dial.
 
 ---
 
@@ -393,12 +395,14 @@ Map batches run in parallel — wall time is `max(batch_time) + reduce_time`, no
 
 ### Token budgets
 
-| Call type | Input budget | Output cap |
-|-----------|-------------|------------|
-| Single-pass | 180k chars (~50k tokens) | 16,384 tokens |
-| Map-reduce batch | 120k chars (~35k tokens) | 16,384 tokens |
-| Reduce (consolidation) | 150k chars diffs + 80k results | 16,384 tokens |
-| Second-pass retry | Diff-only | 16,384 tokens |
+The numbers below are the caps for the **changed files section** of each prompt. Context layers (repo tree, siblings, imports, linter configs, etc.) are assembled independently and add up to ~99K chars on top, for a total prompt of up to ~280K chars (~70K tokens) — well within Claude's 200K token limit.
+
+| Call type | Changed files cap | Output cap |
+|-----------|-------------------|------------|
+| Single-pass | 180K chars (~50K tokens) | 16,384 tokens |
+| Map-reduce batch | 120K chars (~35K tokens) | 16,384 tokens |
+| Reduce (consolidation) | 150K chars diffs + 80K batch results | 16,384 tokens |
+| Second-pass retry | Diff-only (no context layers) | 16,384 tokens |
 
 ### Estimated costs
 

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "435812b5d791df67b4f4035bde9ab235001c7e7f",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T18:40:41+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 13,
+    "total_deletions": 0,
+    "ai_additions": 3,
+    "ai_deletions": 0,
+    "human_additions": 10,
+    "human_deletions": 0
+  },
+  "files": {
+    ".github/workflows/main_hawkeye-reviewer.yml": {
+      "ai_additions": 3,
+      "human_additions": 10,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "29-30,37",
+      "human_lines": "38-47"
+    }
+  }
+}

@@ -89,7 +89,7 @@ Every comment includes the reviewer version (e.g. `v1.4.0`) and an AI-generated 
 
 ### Step 1 — Install the GitHub App
 
-Ask your HawkEye administrator to install the **HawkEye Reviewer** GitHub App on your repository (or organization).
+Ask **Florian-Luis Micu** (`@fmicu` on Slack) to install the **HawkEye Reviewer** GitHub App on your repository (or organization).
 
 ### Step 2 — Encrypt your Bedrock token
 

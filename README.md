@@ -124,7 +124,7 @@ Both scripts communicate with two external systems:
 | Event | Behavior |
 |-------|----------|
 | PR opened / reopened / ready for review | Posts a placeholder comment, runs a full review, sets commit status to `success` |
-| New commits pushed (`synchronize`) | Runs a full re-review automatically. |
+| New commits pushed (`synchronize`) | No automatic review. Use `@hawkeye review` or "Re-request review" to trigger manually. |
 | `@hawkeye review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
 | "Re-request review" button | Runs a full re-review (requires `GITHUB_APP_SLUG` to be set). |
 
@@ -498,7 +498,7 @@ To use Claude's review as a merge gate:
 2. Enable **Require status checks to pass before merging**
 3. Search for and add `HawkEye Review`
 
-When new commits are pushed, a full re-review runs automatically and the status is updated on completion.
+When new commits are pushed, no automatic re-review runs. Use `@hawkeye review` in a comment or click "Re-request review" in the sidebar to trigger a new review.
 
 ## Supported models
 

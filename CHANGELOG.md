@@ -5,7 +5,7 @@
 ### New Features
 
 - **Copilot-like review behaviour** — HawkEye now automatically requests itself as a reviewer when a PR is opened, so it appears in the Reviewers sidebar with a "Re-request review" button from the start
-- **Auto re-review on push** — New commits pushed to an open PR (`synchronize` event) now trigger a full re-review automatically, matching Copilot's behaviour. Previously only set the commit status to pending
+- **Auto re-review on push** — Removed. New commits pushed to an open PR do not trigger a re-review automatically. Use `@hawkeye review` or the "Re-request review" button to trigger manually
 - **Re-request review button** — Clicking the circular arrow "Re-request review" next to HawkEye in the PR sidebar triggers a new review (`pull_request.review_requested` event). Requires `GITHUB_APP_SLUG` env var to be set
 - **`@hawkeye review` mention trigger** — Replaced the `/hawkeye-review` slash command with `@hawkeye review` as the on-demand review trigger in PR comments, consistent with how Copilot is invoked. Case-insensitive
 - **`GITHUB_APP_SLUG` config** — New optional env var that enables the self-reviewer-request and re-request-review features. Set to `hawkeye-reviewer` (or your app's slug) in Azure App Settings
@@ -32,7 +32,7 @@
 ### Breaking Changes
 
 - **`/hawkeye-review` slash command removed** — The on-demand trigger is now `@hawkeye review` as a PR comment. Any documentation, runbooks, or muscle memory referencing `/hawkeye-review` should be updated
-- **`synchronize` events now trigger full reviews** — Previously, pushing new commits only set the commit status to pending and required a manual trigger. Now a full review runs automatically. This increases API/Bedrock usage proportionally to PR activity
+- **`/hawkeye-review` slash command removed** — replaced by `@hawkeye review` (see New Features above)
 
 ### Internal / Cleanup
 

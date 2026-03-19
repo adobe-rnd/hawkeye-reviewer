@@ -714,18 +714,8 @@ def _handle_pull_request(
         invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
         return
 
-    # New commits pushed — re-review like Copilot does.
     if action == "synchronize":
-        if is_draft:
-            info(f"Skipping draft PR #{pr_number} synchronize", env=env_name, repo=repo_ctx)
-            return
-        info(f"PR #{pr_number} synchronize — triggering re-review", env=env_name, repo=repo_ctx)
-        token = get_cached_installation_token(env_name, env_cfg, installation_id)
-        placeholder_id = post_placeholder_comment(
-            env_cfg["github_api_url"], token, owner, repo, pr_number,
-            env_cfg.get("ssl_ca_bundle"),
-        )
-        invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
+        info(f"Ignoring PR synchronize (manual trigger required)", env=env_name, repo=repo_ctx)
         return
 
     if action not in ("opened", "reopened", "ready_for_review"):

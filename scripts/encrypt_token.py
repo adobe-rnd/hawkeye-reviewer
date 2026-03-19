@@ -4,7 +4,7 @@
 Run this locally. Nothing secret is ever sent to the webhook server.
 
 Usage:
-  python3 scripts/encrypt_token.py --token "Bearer YOUR_BEDROCK_TOKEN"
+  python3 scripts/encrypt_token.py --token "YOUR_BEDROCK_TOKEN"
 
 What it does:
   1. Reads the server's RSA public key from hawkeye-public.pem
@@ -102,7 +102,7 @@ def main() -> None:
     parser.add_argument(
         "--token",
         required=True,
-        help='Claude API token to encrypt (e.g. "Bearer YOUR_BEDROCK_TOKEN")',
+        help='Bedrock API token to encrypt',
     )
     parser.add_argument(
         "--public-key-file",

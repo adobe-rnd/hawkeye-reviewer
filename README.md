@@ -94,9 +94,7 @@ The server exposes:
 Each team encrypts their own Claude API token locally and stores the encrypted blob as GitHub repo variables. The server decrypts it at review time using `SERVER_PRIVATE_KEY`.
 
 ```bash
-python3 scripts/encrypt_token.py \
-  --server https://your-server \
-  --token "Bearer YOUR_BEDROCK_TOKEN"
+python3 scripts/encrypt_token.py --token "YOUR_BEDROCK_TOKEN"
 ```
 
 Then set in the repo → **Settings → Secrets and variables → Actions → Variables**:

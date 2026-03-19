@@ -2475,7 +2475,7 @@ def _review_map_reduce_inner(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None,
-) -> tuple[dict, list[dict], int, int]:
+) -> tuple[dict, list[dict], int]:
     shared_context = fetch_shared_context(
         owner, repo, head_sha, github_token, repo_tree, tree_paths,
     )

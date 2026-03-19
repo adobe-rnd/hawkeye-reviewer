@@ -259,6 +259,8 @@ def _github_request(
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
         raise RuntimeError(f"GitHub API {method} {url} → {e.code}: {body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"GitHub API {method} {url} network error: {e}") from e
 
 
 def get_installation_token(
@@ -500,14 +502,21 @@ def read_repo_variables(
         if cached and time.time() < cached[1]:
             return cached[0]
 
-    result: dict[str, str] = {}
-    for var_name in ("HAWKEYE_CLAUDE_API_URL", "HAWKEYE_CLAUDE_BLOB"):
+    var_names = ("HAWKEYE_CLAUDE_API_URL", "HAWKEYE_CLAUDE_BLOB")
+
+    def _fetch_var(var_name: str) -> tuple[str, str]:
         url = f"{github_api_url}/repos/{owner}/{repo}/actions/variables/{var_name}"
         try:
             resp = _github_request("GET", url, token, ca_bundle=ca_bundle)
-            result[var_name] = resp.get("value", "")
+            return var_name, resp.get("value", "")
         except RuntimeError:
-            pass  # Variable not set or no permission — skip
+            return var_name, ""  # Variable not set or no permission — skip
+
+    result: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for var_name, value in pool.map(_fetch_var, var_names):
+            if value:
+                result[var_name] = value
 
     with _var_cache_lock:
         _var_cache[key] = (result, time.time() + _VAR_CACHE_TTL)

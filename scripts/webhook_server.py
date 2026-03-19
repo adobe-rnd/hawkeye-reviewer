@@ -171,7 +171,7 @@ def load_config() -> dict[str, Any]:
 # GitHub App JWT + Installation Token
 # ---------------------------------------------------------------------------
 
-_token_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_token_cache: dict[tuple[str, int], tuple[str, float]] = {}
 _token_cache_lock = threading.Lock()
 
 
@@ -726,6 +726,17 @@ def _handle_issue_comment(
     if "pull_request" not in issue:
         return  # Comment on issue, not a PR
 
+    # Only allow org members, collaborators, and repo owners to trigger reviews.
+    # This prevents fork PR commenters from triggering paid Bedrock calls.
+    allowed_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
+    if comment.get("author_association", "") not in allowed_associations:
+        info(
+            f"PR #{issue.get('number')} — /claude-review ignored "
+            f"(author_association={comment.get('author_association')!r})",
+            env=env_name, repo=repo_ctx,
+        )
+        return
+
     pr_number = issue.get("number")
     info(f"PR #{pr_number} /claude-review comment — triggering review", env=env_name, repo=repo_ctx)
     token = get_cached_installation_token(env_name, env_cfg, installation_id)
@@ -769,7 +780,11 @@ class WebhookHandler(BaseHTTPRequestHandler):
             return
 
         # Read body (cap at 25 MB)
-        content_length = int(self.headers.get("Content-Length", 0))
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            self._respond(400, "Invalid Content-Length")
+            return
         if content_length > 25 * 1024 * 1024:
             self._respond(413, "Payload too large")
             return

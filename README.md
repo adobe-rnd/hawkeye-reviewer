@@ -66,9 +66,11 @@ Run the webhook server with these environment variables:
 | `GITHUB_APP_ID` | Yes | GitHub App ID |
 | `GITHUB_APP_PRIVATE_KEY` | Yes | GitHub App private key (`.pem` contents) |
 | `WEBHOOK_SECRET` | Yes | Webhook secret (must match GitHub App settings) |
-| `SERVER_PRIVATE_KEY` | Yes | RSA-4096 private key for decrypting per-repo Claude credentials |
-| `CLAUDE_API_URL` | No | Server-wide fallback Bedrock endpoint |
-| `CLAUDE_API_TOKEN` | No | Server-wide fallback Bedrock token |
+| `SERVER_PRIVATE_KEY` | No* | RSA-4096 private key for decrypting per-repo Claude credentials |
+| `CLAUDE_API_URL` | No* | Server-wide fallback Bedrock endpoint |
+| `CLAUDE_API_TOKEN` | No* | Server-wide fallback Bedrock token |
+
+\* At least one credential source must be configured: either `SERVER_PRIVATE_KEY` (enables per-repo encrypted credentials) or `CLAUDE_API_URL` + `CLAUDE_API_TOKEN` (server-wide fallback), or both.
 
 Generate `SERVER_PRIVATE_KEY` once and store it permanently:
 

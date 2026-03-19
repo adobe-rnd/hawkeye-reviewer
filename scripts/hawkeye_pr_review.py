@@ -2573,7 +2573,7 @@ def _review_map_reduce_inner(
         combined_comments: list[dict] = []
         for r in batch_results:
             combined_comments.extend(r.get("comments", []))
-        return combined_summary, combined_comments, total_batches, failed_batches
+        return combined_summary, combined_comments, failed_batches
 
     summary = reduce_result.get("summary", {})
     comments = reduce_result.get("comments", [])
@@ -2671,7 +2671,7 @@ def main() -> None:
                 f"{total_changes} changes, {num_batches} batches)...",
                 file=sys.stderr,
             )
-            summary, all_returned, _total_b, failed_b = review_map_reduce(
+            summary, all_returned, failed_b = review_map_reduce(
                 pr_info, files, owner, repo, head_sha, github_token,
                 api_url, api_token, repo_tree, tree_paths,
                 batches=batches,

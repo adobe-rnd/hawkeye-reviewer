@@ -27,6 +27,7 @@ import os
 import ssl
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -197,7 +198,6 @@ def generate_github_app_jwt(app_id: str, pem_path: str | None) -> str:
     pem_contents = os.environ.get("GITHUB_APP_PRIVATE_KEY")
     if pem_contents:
         # Key provided as env var — write to a temp file for openssl
-        import tempfile
         fd, tmp_path = tempfile.mkstemp(suffix=".pem")
         try:
             with os.fdopen(fd, "w") as f:
@@ -394,7 +394,6 @@ def get_server_public_key_pem() -> str:
     private_key_pem = os.environ.get("SERVER_PRIVATE_KEY", "")
     if not private_key_pem:
         return ""
-    import tempfile
     fd, tmp = tempfile.mkstemp(suffix=".pem")
     try:
         with os.fdopen(fd, "w") as f:
@@ -431,7 +430,6 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
     except Exception as exc:
         raise RuntimeError(f"Invalid base64 in encrypted blob: {exc}") from exc
 
-    import tempfile
     fd, key_path = tempfile.mkstemp(suffix=".pem")
     try:
         with os.fdopen(fd, "w") as f:

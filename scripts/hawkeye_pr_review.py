@@ -182,7 +182,20 @@ def edit_comment(owner: str, repo: str, comment_id: int, body: str, token: str) 
     result = github_patch(url, token, {"body": body})
     if result["status"] >= 400:
         raise RuntimeError(f"Failed to edit comment: {result['body']}")
-    print("Placeholder comment updated with review.", file=sys.stderr)
+    print("Placeholder comment updated.", file=sys.stderr)
+
+
+def delete_comment(owner: str, repo: str, comment_id: int, token: str) -> None:
+    """Delete an issue comment (used to remove placeholder after review is posted)."""
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/comments/{comment_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    result = _request("DELETE", url, headers)
+    if result["status"] not in (204, 404):
+        print(f"Failed to delete placeholder comment: {result['status']}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -1750,30 +1763,29 @@ def post_review(
     token: str,
     placeholder_comment_id: int | None = None,
 ) -> None:
-    if placeholder_comment_id:
-        edit_comment(owner, repo, placeholder_comment_id, summary_body, token)
-    else:
-        issue_url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-        result = github_post(issue_url, token, {"body": summary_body})
-        if result["status"] >= 400:
-            raise RuntimeError(f"Failed to post summary: {result['body']}")
-        print("Summary comment posted.", file=sys.stderr)
-
-    if not inline_comments:
-        return
-
-    review_comments: list[dict] = []
-    for c in inline_comments:
-        review_comments.append(
-            {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": format_inline_body(c)}
-        )
+    review_comments: list[dict] = [
+        {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": format_inline_body(c)}
+        for c in inline_comments
+    ]
 
     review_url = f"{GITHUB_API}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
-    payload = {"commit_id": commit_sha, "event": "COMMENT", "comments": review_comments}
+    payload = {
+        "commit_id": commit_sha,
+        "event": "COMMENT",
+        "body": summary_body,
+        "comments": review_comments,
+    }
     result = github_post(review_url, token, payload)
 
-    if result["status"] == 422:
-        print("Batch review returned 422 — retrying individually...", file=sys.stderr)
+    if result["status"] == 422 and review_comments:
+        print("Batch review returned 422 — retrying: body-only review + individual comments...", file=sys.stderr)
+        # Submit summary as a review first
+        body_result = github_post(review_url, token, {
+            "commit_id": commit_sha, "event": "COMMENT", "body": summary_body, "comments": [],
+        })
+        if body_result["status"] >= 400:
+            raise RuntimeError(f"Failed to post summary review: {body_result['body']}")
+        # Then retry inline comments individually
         posted, skipped = 0, 0
         for rc in review_comments:
             single = {"commit_id": commit_sha, "event": "COMMENT", "comments": [rc]}
@@ -1787,7 +1799,11 @@ def post_review(
     elif result["status"] >= 400:
         raise RuntimeError(f"Failed to post review: {result['body']}")
     else:
-        print(f"{len(review_comments)} inline comments posted.", file=sys.stderr)
+        print(f"Review posted ({len(review_comments)} inline comments).", file=sys.stderr)
+
+    # Delete placeholder now that the review is visible in the PR
+    if placeholder_comment_id:
+        delete_comment(owner, repo, placeholder_comment_id, token)
 
 
 RETRY_PROMPT = textwrap.dedent("""\
@@ -2631,8 +2647,7 @@ def main() -> None:
                 {"overview": "This PR only removes files — no code to review."},
                 [], model_name,
             )
-            if placeholder_id:
-                edit_comment(owner, repo, placeholder_id, summary_body, github_token)
+            post_review(owner, repo, pr_number, head_sha, summary_body, [], github_token, placeholder_id)
             set_commit_status(owner, repo, head_sha, "success", "No reviewable files", github_token)
             return
 
@@ -2679,8 +2694,7 @@ def main() -> None:
                     f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
                     f"<sub>{AI_DISCLAIMER}</sub>"
                 )
-                if placeholder_id:
-                    edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
+                post_review(owner, repo, pr_number, head_sha, fallback_body, [], github_token, placeholder_id)
                 set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
                 return
 

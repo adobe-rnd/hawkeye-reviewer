@@ -2776,12 +2776,15 @@ def main() -> None:
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
-        try:
-            if placeholder_id:
+        if placeholder_id:
+            try:
                 edit_comment(owner, repo, placeholder_id, error_body, github_token)
+            except Exception as cleanup_exc:
+                print(f"  Placeholder update failed: {cleanup_exc}", file=sys.stderr)
+        try:
             set_commit_status(owner, repo, head_sha, "error", "Review failed — type /hawkeye-review to retry", github_token)
-        except Exception as cleanup_exc:
-            print(f"  Cleanup also failed: {cleanup_exc}", file=sys.stderr)
+        except Exception as status_exc:
+            print(f"  Status update failed: {status_exc}", file=sys.stderr)
         sys.exit(1)
 
 

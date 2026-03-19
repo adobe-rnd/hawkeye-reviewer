@@ -367,22 +367,6 @@ def post_placeholder_comment(
     return resp["id"]
 
 
-def post_pending_status(
-    github_api_url: str,
-    token: str,
-    owner: str,
-    repo: str,
-    sha: str,
-    ca_bundle: str | None,
-) -> None:
-    """Set commit status to pending (fast path for synchronize events)."""
-    url = f"{github_api_url}/repos/{owner}/{repo}/statuses/{sha}"
-    _github_request("POST", url, token, {
-        "state": "pending",
-        "context": "HawkEye Review",
-        "description": "Type /hawkeye-review to review latest changes",
-    }, ca_bundle=ca_bundle)
-
 
 def request_self_as_reviewer(
     github_api_url: str,
@@ -630,7 +614,7 @@ def invoke_review(
             err_body = (
                 "<h2>❌ HawkEye Reviewer — review failed</h2>\n\n"
                 f"{message}\n\n"
-                "Type `/hawkeye-review` in a comment to retry."
+                "Comment `@hawkeye review` to retry."
             )
             _github_request(
                 "PATCH",

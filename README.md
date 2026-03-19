@@ -9,7 +9,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 ## Features
 
 - **Automatic reviews** on every PR (opened, reopened, ready for review)
-- **On-demand reviews** via `/hawkeye-review` comment for re-reviewing after new commits
+- **On-demand reviews** via `@hawkeye review` comment to trigger or re-trigger a review
 - **Map-reduce pipeline** — handles large PRs (8+ files or 1500+ changes) with parallel batch reviews and cross-file consolidation
 - **Smart token optimization** — 30-40% token savings via expanded diff context, structural signatures, and intelligent truncation
 - **Full repository awareness** — directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs
@@ -30,7 +30,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 
 The bot runs as a **standalone webhook server** (`webhook_server.py`) that receives GitHub webhooks directly and triggers the review script as a subprocess.
 
-1. GitHub sends a webhook event (PR opened, `/hawkeye-review` comment) to the server
+1. GitHub sends a webhook event (PR opened, `@hawkeye review` comment) to the server
 2. The server validates the HMAC signature, generates a GitHub App installation token, posts a placeholder comment, and queues the review
 3. `hawkeye_pr_review.py` assembles the prompt, calls Claude via Bedrock, and posts inline review comments
 
@@ -124,8 +124,9 @@ Both scripts communicate with two external systems:
 | Event | Behavior |
 |-------|----------|
 | PR opened / reopened / ready for review | Posts a placeholder comment, runs a full review, sets commit status to `success` |
-| New commits pushed (`synchronize`) | Sets commit status to `pending` (invalidates previous review). No new review runs automatically. |
-| `/hawkeye-review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
+| New commits pushed (`synchronize`) | Runs a full re-review automatically. |
+| `@hawkeye review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
+| "Re-request review" button | Runs a full re-review (requires `GITHUB_APP_SLUG` to be set). |
 
 ### Review output
 
@@ -497,7 +498,7 @@ To use Claude's review as a merge gate:
 2. Enable **Require status checks to pass before merging**
 3. Search for and add `HawkEye Review`
 
-When new commits are pushed, the status is automatically set to `pending`, requiring either a new `/hawkeye-review` or a new PR event to pass.
+When new commits are pushed, a full re-review runs automatically and the status is updated on completion.
 
 ## Supported models
 

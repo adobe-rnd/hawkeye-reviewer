@@ -1659,7 +1659,7 @@ def format_summary_comment(
         parts.append(
             "\n---\n\u26a0\ufe0f Review incomplete — some batches failed. "
             "No issues found in the files that were reviewed, but not all files "
-            "could be analyzed. Type `/hawkeye-review` to retry."
+            "could be analyzed. Comment `@hawkeye review` to retry."
         )
     else:
         parts.append(
@@ -1670,7 +1670,7 @@ def format_summary_comment(
     mode_text = f" | {review_mode}" if review_mode else ""
     parts.append(
         f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock{mode_text}"
-        f" | Type `/hawkeye-review` in a comment to re-review after new commits | v{VERSION}</sub>\n\n"
+        f" | Comment `@hawkeye review` to re-review | v{VERSION}</sub>\n\n"
         f"<sub>{AI_DISCLAIMER}</sub>"
     )
 
@@ -2764,7 +2764,7 @@ def main() -> None:
         if use_map_reduce and failed_b:
             set_commit_status(
                 owner, repo, head_sha, "failure",
-                f"Partial review — {failed_b}/{num_batches} batches failed, retry with /hawkeye-review",
+                f"Partial review — {failed_b}/{num_batches} batches failed, comment @hawkeye review to retry",
                 github_token,
             )
         else:
@@ -2777,7 +2777,7 @@ def main() -> None:
         error_body = (
             f"<h2>{logo} HawkEye Review</h2>\n\n"
             f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
-            "This may be a transient issue. Type `/hawkeye-review` in a comment to retry.\n\n"
+            "This may be a transient issue. Comment `@hawkeye review` to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
@@ -2787,7 +2787,7 @@ def main() -> None:
             except Exception as cleanup_exc:
                 print(f"  Placeholder update failed: {cleanup_exc}", file=sys.stderr)
         try:
-            set_commit_status(owner, repo, head_sha, "error", "Review failed — type /hawkeye-review to retry", github_token)
+            set_commit_status(owner, repo, head_sha, "error", "Review failed — comment @hawkeye review to retry", github_token)
         except Exception as status_exc:
             print(f"  Status update failed: {status_exc}", file=sys.stderr)
         sys.exit(1)

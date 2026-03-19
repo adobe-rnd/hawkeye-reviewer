@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "bf0ad5c7fea099e01be06a36078e63f661ed618d",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T22:18:57+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 11,
+    "total_deletions": 0,
+    "ai_additions": 11,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "CHANGELOG.md": {
+      "ai_additions": 9,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "2-10",
+      "human_lines": ""
+    },
+    "README.md": {
+      "ai_additions": 1,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "82",
+      "human_lines": ""
+    },
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 1,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "26",
+      "human_lines": ""
+    }
+  }
+}

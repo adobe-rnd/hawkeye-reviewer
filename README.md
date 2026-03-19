@@ -99,7 +99,7 @@ python3 scripts/encrypt_token.py --token "YOUR_BEDROCK_TOKEN"
 
 Then set in the repo → **Settings → Secrets and variables → Actions → Variables**:
 - `HAWKEYE_CLAUDE_API_URL` = your Bedrock endpoint URL
-- `HAWKEYE_CLAUDE_API_TOKEN` = encrypted blob from above
+- `HAWKEYE_CLAUDE_BLOB` = encrypted blob from above
 
 Example `HAWKEYE_CLAUDE_API_URL`:
 

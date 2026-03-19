@@ -461,7 +461,7 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# GitHub repo variables  (HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_API_TOKEN)
+# GitHub repo variables  (HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB)
 # ---------------------------------------------------------------------------
 
 _var_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
@@ -476,7 +476,7 @@ def read_repo_variables(
     repo: str,
     ca_bundle: str | None,
 ) -> dict[str, str]:
-    """Read HAWKEYE_CLAUDE_API_URL and HAWKEYE_CLAUDE_API_TOKEN variables
+    """Read HAWKEYE_CLAUDE_API_URL and HAWKEYE_CLAUDE_BLOB variables
     from the repo via GitHub API. Returns {} if not set or on error.
     Requires the GitHub App to have 'variables: read' permission.
     """
@@ -490,7 +490,7 @@ def read_repo_variables(
             return cached[0]
 
     result: dict[str, str] = {}
-    for var_name in ("HAWKEYE_CLAUDE_API_URL", "HAWKEYE_CLAUDE_API_TOKEN"):
+    for var_name in ("HAWKEYE_CLAUDE_API_URL", "HAWKEYE_CLAUDE_BLOB"):
         url = f"{github_api_url}/repos/{owner}/{repo}/actions/variables/{var_name}"
         try:
             resp = _github_request("GET", url, token, ca_bundle=ca_bundle)
@@ -516,7 +516,7 @@ def _resolve_claude_credentials(
     """Resolve Claude API URL and token for a given repo.
 
     Lookup order (most specific wins):
-      1. GitHub repo Actions variables  HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_API_TOKEN
+      1. GitHub repo Actions variables  HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB
          (set by the repo team; token value must be encrypted with encrypt_token.py)
       2. Server default from env_cfg (CLAUDE_API_URL / CLAUDE_API_TOKEN)
     """
@@ -531,7 +531,7 @@ def _resolve_claude_credentials(
                 env_cfg.get("ssl_ca_bundle"),
             )
             repo_url = repo_vars.get("HAWKEYE_CLAUDE_API_URL", "").strip()
-            repo_token_enc = repo_vars.get("HAWKEYE_CLAUDE_API_TOKEN", "").strip()
+            repo_token_enc = repo_vars.get("HAWKEYE_CLAUDE_BLOB", "").strip()
             if repo_url and repo_token_enc:
                 repo_token = decrypt_repo_token(repo_token_enc)
                 return repo_url, repo_token
@@ -567,7 +567,7 @@ def invoke_review(
                     "<h2>⚠️ HawkEye Reviewer — credentials not configured</h2>\n\n"
                     "This repo has no Claude API credentials set up.\n\n"
                     "Ask your team admin to set the **`HAWKEYE_CLAUDE_API_URL`** and "
-                    "**`HAWKEYE_CLAUDE_API_TOKEN`** Actions variables on this repo "
+                    "**`HAWKEYE_CLAUDE_BLOB`** Actions variables on this repo "
                     "(see the [setup guide](https://github.com/adobe-rnd/hawkeye-reviewer) "
                     "for instructions)."
                 )

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "5416c67496f86fbe72b08e36468d5ed3672432ee",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T19:12:30+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 10,
+    "total_deletions": 0,
+    "ai_additions": 10,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/encrypt_token.py": {
+      "ai_additions": 10,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "7,10,97-99,111-112,116-118",
+      "human_lines": ""
+    }
+  }
+}

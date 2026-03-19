@@ -100,10 +100,10 @@ python3 scripts/encrypt_token.py \
 ```
 
 Then set in the repo → **Settings → Secrets and variables → Actions → Variables**:
-- `CLAUDE_REVIEWER_API_URL` = your Bedrock endpoint URL
-- `CLAUDE_REVIEWER_API_TOKEN` = encrypted blob from above
+- `HAWKEYE_API_URL` = your Bedrock endpoint URL
+- `HAWKEYE_API_TOKEN` = encrypted blob from above
 
-Example `CLAUDE_REVIEWER_API_URL`:
+Example `HAWKEYE_API_URL`:
 
 ```
 https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
@@ -487,7 +487,7 @@ Costs scale with PR size and model choice. Latency is dominated by the Claude AP
 
 ### Reducing cost
 
-- Use a smaller/faster model (e.g. Claude Haiku) via the `CLAUDE_REVIEWER_API_URL` repo variable
+- Use a smaller/faster model (e.g. Claude Haiku) via the `HAWKEYE_API_URL` repo variable
 - Add a `.github/claude-review.md` to skip whole review categories (e.g. "skip design suggestions") — fewer relevant findings means fewer tokens spent reasoning about them
 - The smart file inclusion and structural signatures features already save an estimated 40–60% of file content tokens compared to sending full source for every file
 

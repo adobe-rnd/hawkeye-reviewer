@@ -13,14 +13,14 @@ What it does:
   2. Generates a random AES-256 key + IV
   3. Encrypts the token with AES-256-CBC
   4. Encrypts the AES key+IV with RSA-4096-OAEP (using the server's public key)
-  5. Outputs the encrypted blob to set as CLAUDE_REVIEWER_API_TOKEN in your repo
+  5. Outputs the encrypted blob to set as HAWKEYE_API_TOKEN in your repo
 
 Zero pip dependencies — requires Python 3.8+ and openssl on PATH.
 
 GitHub repo variable setup (one-time per repo):
   1. Go to your repo → Settings → Secrets and variables → Actions → Variables
-  2. Create CLAUDE_REVIEWER_API_URL  = your Bedrock endpoint URL
-  3. Create CLAUDE_REVIEWER_API_TOKEN = the encrypted blob printed by this script
+  2. Create HAWKEYE_API_URL  = your Bedrock endpoint URL
+  3. Create HAWKEYE_API_TOKEN = the encrypted blob printed by this script
 """
 
 import argparse
@@ -134,7 +134,7 @@ def main() -> None:
 
     print()
     print("=" * 60)
-    print("Encrypted blob (copy this as CLAUDE_REVIEWER_API_TOKEN):")
+    print("Encrypted blob (copy this as HAWKEYE_API_TOKEN):")
     print()
     print(blob)
     print()
@@ -142,8 +142,8 @@ def main() -> None:
     print()
     print("Next steps:")
     print("  1. Go to your repo → Settings → Secrets and variables → Actions → Variables")
-    print("  2. Create variable: CLAUDE_REVIEWER_API_URL  = <your Bedrock endpoint URL>")
-    print("  3. Create variable: CLAUDE_REVIEWER_API_TOKEN = <the blob above>")
+    print("  2. Create variable: HAWKEYE_API_URL  = <your Bedrock endpoint URL>")
+    print("  3. Create variable: HAWKEYE_API_TOKEN = <the blob above>")
     print()
     print("That's it — the webhook server will pick up the variables automatically.")
 

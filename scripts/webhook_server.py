@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Webhook server for Claude PR Reviewer.
+"""Webhook server for HawkEye Reviewer.
 
 Receives GitHub webhooks and triggers claude_pr_review.py as a subprocess.
 Supports multiple GitHub environments (github.com orgs and GitHub Enterprise
@@ -373,7 +373,7 @@ def post_pending_status(
     url = f"{github_api_url}/repos/{owner}/{repo}/statuses/{sha}"
     _github_request("POST", url, token, {
         "state": "pending",
-        "context": "Claude Bedrock PR Review",
+        "context": "HawkEye Review",
         "description": "Type /claude-review to review latest changes",
     }, ca_bundle=ca_bundle)
 
@@ -561,11 +561,11 @@ def invoke_review(
         if placeholder_id:
             try:
                 err_body = (
-                    "<h2>⚠️ Claude PR Reviewer — credentials not configured</h2>\n\n"
+                    "<h2>⚠️ HawkEye Reviewer — credentials not configured</h2>\n\n"
                     "This repo has no Claude API credentials set up.\n\n"
                     "Ask your team admin to set the **`CLAUDE_REVIEWER_API_URL`** and "
                     "**`CLAUDE_REVIEWER_API_TOKEN`** Actions variables on this repo "
-                    "(see the [setup guide](https://github.com/adobe-rnd/claude-pr-reviewer) "
+                    "(see the [setup guide](https://github.com/adobe-rnd/hawkeye-reviewer) "
                     "for instructions)."
                 )
                 _github_request(
@@ -596,7 +596,7 @@ def invoke_review(
             return
         try:
             err_body = (
-                "<h2>❌ Claude PR Reviewer — review failed</h2>\n\n"
+                "<h2>❌ HawkEye Reviewer — review failed</h2>\n\n"
                 f"{message}\n\n"
                 "Type `/claude-review` in a comment to retry."
             )

@@ -1,4 +1,4 @@
-# Claude Bedrock PR Reviewer
+# HawkEye Reviewer
 
 AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Provides senior-engineer-level review comments with inline suggestions, design feedback, and automatic repo context awareness — all from a single Python script with zero dependencies.
 
@@ -21,7 +21,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 - **Comment deduplication** — skips duplicate comments on re-review so you don't get the same feedback twice
 - **Instant feedback** — posts a placeholder comment immediately while Claude analyzes
 - **Version label and AI disclaimer** — every comment shows the reviewer version and an AI-generated content notice
-- **Merge gate** — sets a commit status (`Claude Bedrock PR Review`) that can be required in branch protection rules
+- **Merge gate** — sets a commit status (`HawkEye Review`) that can be required in branch protection rules
 - **Smart invalidation** — new commits automatically set the status to "pending" so stale reviews don't block merges
 - **Draft PR aware** — skips draft PRs to avoid wasting API calls
 - **Zero dependencies** — uses only Python's standard library (no `pip install`)
@@ -40,7 +40,7 @@ The bot runs as a **standalone webhook server** (`webhook_server.py`) that recei
 
 Create a GitHub App (**GitHub → Settings → Developer settings → GitHub Apps → New GitHub App**):
 
-- **Name:** Any unique name (e.g. "Claude PR Reviewer")
+- **Name:** Any unique name (e.g. "HawkEye Reviewer")
 - **Homepage URL:** Your repo URL
 - **Webhook:** Active ✓, URL: `https://your-server/webhook`, Secret: `openssl rand -hex 32`
 - **Permissions:**
@@ -131,7 +131,7 @@ Both scripts communicate with two external systems:
 
 1. **Summary comment** — overview of the PR, list of changes, file table, and count of inline comments by severity
 2. **Inline comments** — posted on the relevant lines in the diff, with optional `suggestion` blocks for one-click fixes
-3. **Commit status** — `Claude Bedrock PR Review` on the head commit (`success`, `pending`, or `error`)
+3. **Commit status** — `HawkEye Review` on the head commit (`success`, `pending`, or `error`)
 
 Every comment includes the reviewer version (e.g. `v1.3.0`) and an AI-generated content disclaimer.
 
@@ -495,7 +495,7 @@ To use Claude's review as a merge gate:
 
 1. Go to **Settings > Branches > Branch protection rules**
 2. Enable **Require status checks to pass before merging**
-3. Search for and add `Claude Bedrock PR Review`
+3. Search for and add `HawkEye Review`
 
 When new commits are pushed, the status is automatically set to `pending`, requiring either a new `/claude-review` or a new PR event to pass.
 

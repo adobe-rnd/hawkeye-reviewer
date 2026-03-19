@@ -4,12 +4,10 @@
 Run this locally. Nothing secret is ever sent to the webhook server.
 
 Usage:
-  python3 scripts/encrypt_token.py \\
-      --server https://your-server.azurewebsites.net \\
-      --token "Bearer YOUR_BEDROCK_TOKEN"
+  python3 scripts/encrypt_token.py --token "Bearer YOUR_BEDROCK_TOKEN"
 
 What it does:
-  1. Fetches the server's RSA public key from GET /public-key
+  1. Reads the server's RSA public key from hawkeye-public.pem
   2. Generates a random AES-256 key + IV
   3. Encrypts the token with AES-256-CBC
   4. Encrypts the AES key+IV with RSA-4096-OAEP (using the server's public key)
@@ -94,13 +92,12 @@ def encrypt_token(public_key_pem: str, token: str) -> str:
     return f"{part1}.{part2}"
 
 
+DEFAULT_PUBLIC_KEY = os.path.join(os.path.dirname(__file__), "..", "hawkeye-public.pem")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Encrypt a Claude API token for storage as a GitHub repo variable."
-    )
-    parser.add_argument(
-        "--server",
-        help="Webhook server base URL (e.g. https://your-server.azurewebsites.net)",
     )
     parser.add_argument(
         "--token",
@@ -109,21 +106,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--public-key-file",
-        help="Use a local PEM file instead of fetching from --server (for air-gapped use)",
+        default=DEFAULT_PUBLIC_KEY,
+        help="Path to the server's RSA public key PEM file (default: hawkeye-public.pem)",
     )
     args = parser.parse_args()
 
-    if not args.server and not args.public_key_file:
-        parser.error("either --server or --public-key-file is required")
-
-    if args.public_key_file:
-        with open(args.public_key_file) as f:
-            public_key_pem = f.read()
-        print(f"Using local public key: {args.public_key_file}")
-    else:
-        print(f"Fetching public key from {args.server}/public-key ...")
-        public_key_pem = fetch_public_key(args.server)
-        print("Public key fetched OK")
+    with open(args.public_key_file) as f:
+        public_key_pem = f.read()
+    print(f"Using public key: {args.public_key_file}")
 
     if "PUBLIC KEY" not in public_key_pem:
         print("ERROR: Fetched content does not look like a PEM public key", file=sys.stderr)

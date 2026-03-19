@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "beb5fd01c6fd489192839d47d7f8d4616088f3b8",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T23:37:00+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 0,
+    "total_deletions": 516,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 516
+  },
+  "files": {
+    "diagrams/01_system_architecture.svg": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 126
+    },
+    "diagrams/02_review_pipeline.html": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 238
+    },
+    "diagrams/03_context_window.png": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0
+    },
+    "diagrams/hawkeye_prompt_assembly_v6.html": {
+      "ai_additions": 0,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 152
+    }
+  }
+}

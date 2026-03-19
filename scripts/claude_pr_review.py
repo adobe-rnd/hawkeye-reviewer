@@ -2679,7 +2679,8 @@ def main() -> None:
                     f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
                     f"<sub>{AI_DISCLAIMER}</sub>"
                 )
-                edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
+                if placeholder_id:
+                    edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
                 set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
                 return
 
@@ -2762,7 +2763,8 @@ def main() -> None:
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
         try:
-            edit_comment(owner, repo, placeholder_id, error_body, github_token)
+            if placeholder_id:
+                edit_comment(owner, repo, placeholder_id, error_body, github_token)
             set_commit_status(owner, repo, head_sha, "error", "Review failed — type /claude-review to retry", github_token)
         except Exception as cleanup_exc:
             print(f"  Cleanup also failed: {cleanup_exc}", file=sys.stderr)

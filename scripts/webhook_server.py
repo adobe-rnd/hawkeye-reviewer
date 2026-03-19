@@ -415,8 +415,11 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
     if len(parts) != 2:
         raise RuntimeError("Invalid encrypted blob format (expected two base64 parts)")
 
-    encrypted_key_iv = base64.b64decode(parts[0])
-    encrypted_token = base64.b64decode(parts[1])
+    try:
+        encrypted_key_iv = base64.b64decode(parts[0], validate=True)
+        encrypted_token = base64.b64decode(parts[1], validate=True)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid base64 in encrypted blob: {exc}") from exc
 
     import tempfile
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:

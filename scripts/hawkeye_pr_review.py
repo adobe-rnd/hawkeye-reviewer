@@ -883,6 +883,7 @@ def get_sibling_files(
             score = _sibling_relevance(tree_path, changed_names)
             candidates.append((tree_path, dirpart, score))
 
+    candidates = [(p, d, s) for p, d, s in candidates if s >= SIBLING_MIN_RELEVANCE]
     candidates.sort(key=lambda x: (-x[2], x[0]))
 
     blocks: list[str] = []
@@ -893,8 +894,6 @@ def get_sibling_files(
     for path, dirpart, score in candidates:
         if total_files >= SIBLING_MAX_FILES or total_chars >= SIBLING_MAX_TOTAL:
             break
-        if score < SIBLING_MIN_RELEVANCE:
-            continue
         if dir_counts.get(dirpart, 0) >= SIBLING_MAX_PER_DIR:
             continue
         if fetched_paths is not None and path in fetched_paths:
@@ -1399,10 +1398,15 @@ def fetch_shared_context(
     tree_paths: set[str] | None = None,
 ) -> dict[str, str]:
     """Fetch repo context, docs, guidelines, linter config, and tree formatting — shared across all review batches."""
-    repo_context = get_repo_context(owner, repo, head_sha, token, tree_paths)
-    repo_docs = get_repo_docs(owner, repo, head_sha, token, tree_paths)
-    guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
-    linter_config = get_linter_config(owner, repo, head_sha, token, tree_paths)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_ctx   = ex.submit(get_repo_context,      owner, repo, head_sha, token, tree_paths)
+        f_docs  = ex.submit(get_repo_docs,          owner, repo, head_sha, token, tree_paths)
+        f_guide = ex.submit(get_review_guidelines,  owner, repo, head_sha, token, tree_paths)
+        f_lint  = ex.submit(get_linter_config,      owner, repo, head_sha, token, tree_paths)
+        repo_context  = f_ctx.result()
+        repo_docs     = f_docs.result()
+        guidelines    = f_guide.result()
+        linter_config = f_lint.result()
 
     return {
         "repo_context_section": f"## Repository context\n\n{repo_context}" if repo_context else "",
@@ -1491,16 +1495,19 @@ def build_prompt(
 
     files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
 
-    repo_context = get_repo_context(owner, repo, head_sha, token, tree_paths)
-    repo_context_section = f"## Repository context\n\n{repo_context}" if repo_context else ""
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_ctx   = ex.submit(get_repo_context,      owner, repo, head_sha, token, tree_paths)
+        f_docs  = ex.submit(get_repo_docs,          owner, repo, head_sha, token, tree_paths)
+        f_guide = ex.submit(get_review_guidelines,  owner, repo, head_sha, token, tree_paths)
+        f_lint  = ex.submit(get_linter_config,      owner, repo, head_sha, token, tree_paths)
+        repo_context  = f_ctx.result()
+        repo_docs     = f_docs.result()
+        guidelines    = f_guide.result()
+        linter_config = f_lint.result()
 
-    repo_docs = get_repo_docs(owner, repo, head_sha, token, tree_paths)
-    repo_docs_section = f"## Project documentation\n\n{repo_docs}" if repo_docs else ""
-
-    guidelines = get_review_guidelines(owner, repo, head_sha, token, tree_paths)
-    guidelines_section = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
-
-    linter_config = get_linter_config(owner, repo, head_sha, token, tree_paths)
+    repo_context_section  = f"## Repository context\n\n{repo_context}" if repo_context else ""
+    repo_docs_section     = f"## Project documentation\n\n{repo_docs}" if repo_docs else ""
+    guidelines_section    = f"## Repository guidelines\n\n{guidelines}" if guidelines else ""
     linter_config_section = (
         "## Linter and formatter configuration\n\n"
         "The following linter/formatter configs are active in this project. "
@@ -2445,20 +2452,15 @@ def review_map_reduce(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None = None,
-) -> tuple[dict, list[dict], int, int]:
+) -> tuple[dict, list[dict], int]:
     """Run a map-reduce review: parallel batch reviews followed by a consolidation pass.
 
-    Returns (summary, comments, total_batches, failed_batches).
+    Returns (summary, comments, failed_batches).
     """
-    _enable_file_content_cache()
-
-    try:
-        return _review_map_reduce_inner(
-            pr_info, files, owner, repo, head_sha, github_token,
-            api_url, api_token, repo_tree, tree_paths, batches,
-        )
-    finally:
-        _disable_file_content_cache()
+    return _review_map_reduce_inner(
+        pr_info, files, owner, repo, head_sha, github_token,
+        api_url, api_token, repo_tree, tree_paths, batches,
+    )
 
 
 def _review_map_reduce_inner(
@@ -2633,6 +2635,7 @@ def main() -> None:
     logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
     footer_logo = f'<img src="{BOT_AVATAR}" width="13" height="13" align="absmiddle">'
 
+    _enable_file_content_cache()
     try:
         files = get_changed_files(owner, repo, pr_number, github_token)
         print(f"  {len(files)} changed file(s).", file=sys.stderr)
@@ -2791,6 +2794,8 @@ def main() -> None:
         except Exception as status_exc:
             print(f"  Status update failed: {status_exc}", file=sys.stderr)
         sys.exit(1)
+    finally:
+        _disable_file_content_cache()
 
 
 if __name__ == "__main__":

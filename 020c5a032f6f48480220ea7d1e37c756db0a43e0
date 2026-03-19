@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "020c5a032f6f48480220ea7d1e37c756db0a43e0",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T18:55:32+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude-code",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 18,
+    "total_deletions": 0,
+    "ai_additions": 18,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 4,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-4",
+      "human_lines": ""
+    },
+    "scripts/encrypt_token.py": {
+      "ai_additions": 6,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "16,22-23,137,145-146",
+      "human_lines": ""
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 8,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "464,479,493,519,533-534,569-570",
+      "human_lines": ""
+    }
+  }
+}

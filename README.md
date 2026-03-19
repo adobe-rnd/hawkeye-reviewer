@@ -3,7 +3,7 @@
 AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Provides senior-engineer-level review comments with inline suggestions, design feedback, and automatic repo context awareness — all from a single Python script with zero dependencies.
 
 <p align="center">
-  <img src="diagrams/01_system_architecture.svg" alt="System Architecture">
+  <img src="diagrams/01_system_architecture.png" alt="System Architecture">
 </p>
 
 ---

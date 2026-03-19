@@ -37,8 +37,7 @@
 <text x="58" y="140" fill="#e2e4ea" font-size="13" font-weight="600">GitHub events</text>
 <text x="48" y="166" fill="#8b8fa3" font-size="11.5">PR opened / reopened /</text>
 <text x="48" y="182" fill="#8b8fa3" font-size="11.5">ready for review</text>
-<text x="48" y="206" fill="#8b8fa3" font-size="11.5" font-family="'SF Mono', 'Fira Code', monospace" font-size="10.5">@hawkeye review</text>
-<text x="148" y="206" fill="#8b8fa3" font-size="11.5"> comment</text>
+<text x="48" y="206" fill="#8b8fa3" font-size="11.5"><tspan font-family="'SF Mono', 'Fira Code', monospace" font-size="10.5">@hawkeye review</tspan> comment</text>
 <text x="48" y="230" fill="#8b8fa3" font-size="11.5">"Re-request review" button</text>
 
 <!-- LEFT: GITHUB API -->

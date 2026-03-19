@@ -111,6 +111,7 @@ def _load_single_env_config() -> dict[str, Any]:
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise ValueError(f"Missing required env vars for single-env mode: {', '.join(missing)}")
+    slug = os.environ.get("GITHUB_APP_SLUG", "")
     return {
         "github_api_url": os.environ.get("GITHUB_API_URL", "https://api.github.com"),
         "github_app_id": os.environ.get("GITHUB_APP_ID"),
@@ -119,6 +120,7 @@ def _load_single_env_config() -> dict[str, Any]:
         "api_url": os.environ.get("CLAUDE_API_URL", ""),
         "api_token": os.environ.get("CLAUDE_API_TOKEN", ""),
         "ssl_ca_bundle": os.environ.get("SSL_CA_BUNDLE"),
+        "bot_login": f"{slug}[bot]" if slug else "",
     }
 
 
@@ -382,6 +384,23 @@ def post_pending_status(
     }, ca_bundle=ca_bundle)
 
 
+def request_self_as_reviewer(
+    github_api_url: str,
+    token: str,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    bot_login: str,
+    ca_bundle: str | None,
+) -> None:
+    """Add HawkEye as a requested reviewer so the 'Re-request review' button appears."""
+    url = f"{github_api_url}/repos/{owner}/{repo}/pulls/{pr_number}/requested_reviewers"
+    try:
+        _github_request("POST", url, token, {"reviewers": [bot_login]}, ca_bundle=ca_bundle)
+    except RuntimeError as exc:
+        warn(f"Could not request self as reviewer ({bot_login}): {exc}")
+
+
 # ---------------------------------------------------------------------------
 # Server key pair  (RSA-4096, generated once by the server admin)
 # ---------------------------------------------------------------------------
@@ -392,10 +411,13 @@ def get_server_public_key_pem() -> str:
     if not private_key_pem:
         return ""
     import tempfile
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
-        f.write(private_key_pem.replace("\\n", "\n"))
-        tmp = f.name
-    os.chmod(tmp, 0o600)
+    fd, tmp = tempfile.mkstemp(suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(private_key_pem.replace("\\n", "\n"))
+    except Exception:
+        os.unlink(tmp)
+        raise
     try:
         result = subprocess.run(
             ["openssl", "pkey", "-in", tmp, "-pubout"],
@@ -688,14 +710,40 @@ def _handle_pull_request(
     action = payload.get("action", "")
     pr = payload.get("pull_request", {})
     pr_number = pr.get("number")
-    sha = pr.get("head", {}).get("sha", "")
     is_draft = pr.get("draft", False)
+    bot_login = env_cfg.get("bot_login", "")
 
-    if action == "synchronize":
-        info(f"PR #{pr_number} synchronize — setting pending status", env=env_name, repo=repo_ctx)
+    # "Re-request review" button — fires when a reviewer is (re-)requested.
+    # Only act when it's specifically our bot being requested.
+    if action == "review_requested":
+        requested = payload.get("requested_reviewer", {})
+        if not bot_login or requested.get("login") != bot_login:
+            info(
+                f"Ignoring review_requested for {requested.get('login')!r}",
+                env=env_name, repo=repo_ctx,
+            )
+            return
+        info(f"PR #{pr_number} re-review requested — triggering review", env=env_name, repo=repo_ctx)
         token = get_cached_installation_token(env_name, env_cfg, installation_id)
-        post_pending_status(env_cfg["github_api_url"], token, owner, repo, sha,
-                            env_cfg.get("ssl_ca_bundle"))
+        placeholder_id = post_placeholder_comment(
+            env_cfg["github_api_url"], token, owner, repo, pr_number,
+            env_cfg.get("ssl_ca_bundle"),
+        )
+        invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
+        return
+
+    # New commits pushed — re-review like Copilot does.
+    if action == "synchronize":
+        if is_draft:
+            info(f"Skipping draft PR #{pr_number} synchronize", env=env_name, repo=repo_ctx)
+            return
+        info(f"PR #{pr_number} synchronize — triggering re-review", env=env_name, repo=repo_ctx)
+        token = get_cached_installation_token(env_name, env_cfg, installation_id)
+        placeholder_id = post_placeholder_comment(
+            env_cfg["github_api_url"], token, owner, repo, pr_number,
+            env_cfg.get("ssl_ca_bundle"),
+        )
+        invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
         return
 
     if action not in ("opened", "reopened", "ready_for_review"):
@@ -708,6 +756,15 @@ def _handle_pull_request(
 
     info(f"PR #{pr_number} {action} — triggering review", env=env_name, repo=repo_ctx)
     token = get_cached_installation_token(env_name, env_cfg, installation_id)
+
+    # Request self as reviewer so HawkEye appears in the sidebar with the
+    # "Re-request review" button (mirrors Copilot's behaviour).
+    if bot_login:
+        request_self_as_reviewer(
+            env_cfg["github_api_url"], token, owner, repo, pr_number,
+            bot_login, env_cfg.get("ssl_ca_bundle"),
+        )
+
     placeholder_id = post_placeholder_comment(
         env_cfg["github_api_url"], token, owner, repo, pr_number,
         env_cfg.get("ssl_ca_bundle"),

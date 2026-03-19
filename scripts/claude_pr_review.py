@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude PR Reviewer via Bedrock — posts Copilot-style reviews on pull requests.
+"""HawkEye Reviewer via Bedrock — posts Copilot-style reviews on pull requests.
 
 Uses only the Python standard library (no pip install needed).
 """
@@ -17,11 +17,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-GITHUB_API = "https://api.github.com"
+GITHUB_API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+_github_base = GITHUB_API.replace("/api/v3", "").replace("api.", "")
+CLAUDE_AVATAR = f"{_github_base}/anthropics.png?size=36"
 
-CLAUDE_AVATAR = "https://github.com/anthropics.png?size=36"
-
-STATUS_CONTEXT = "Claude Bedrock PR Review"
+STATUS_CONTEXT = "HawkEye Review"
 
 VERSION = "1.3.0"
 
@@ -175,24 +175,6 @@ def set_commit_status(owner: str, repo: str, sha: str, state: str, description: 
 # ---------------------------------------------------------------------------
 # Placeholder comment (post → edit in-place)
 # ---------------------------------------------------------------------------
-
-PLACEHOLDER_BODY = (
-    f'<h2><img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle"> '
-    f"Reviewing your PR...</h2>\n\n"
-    "\u23f3 Claude is analyzing your changes. "
-    "A detailed review with inline comments will appear here shortly."
-)
-
-
-def post_placeholder_comment(owner: str, repo: str, pr_number: int, token: str) -> int:
-    """Post a placeholder comment and return the comment ID."""
-    url = f"{GITHUB_API}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-    result = github_post(url, token, {"body": PLACEHOLDER_BODY})
-    if result["status"] >= 400:
-        raise RuntimeError(f"Failed to post placeholder: {result['body']}")
-    print("Placeholder comment posted.", file=sys.stderr)
-    return result["body"]["id"]
-
 
 def edit_comment(owner: str, repo: str, comment_id: int, body: str, token: str) -> None:
     """Edit an existing issue comment in-place."""
@@ -2626,8 +2608,6 @@ def main() -> None:
 
     placeholder_id_str = os.environ.get("PLACEHOLDER_COMMENT_ID", "")
     placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
-    if not placeholder_id:
-        placeholder_id = post_placeholder_comment(owner, repo, pr_number, github_token)
 
     logo = f'<img src="{CLAUDE_AVATAR}" width="18" height="18" align="absmiddle">'
     footer_logo = f'<img src="{CLAUDE_AVATAR}" width="13" height="13" align="absmiddle">'
@@ -2693,13 +2673,14 @@ def main() -> None:
             if not response:
                 print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
                 fallback_body = (
-                    f"<h2>{logo} AI PR Review</h2>\n\n"
+                    f"<h2>{logo} HawkEye Review</h2>\n\n"
                     "Claude returned a response that could not be parsed as structured JSON.\n\n"
                     f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
                     f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
                     f"<sub>{AI_DISCLAIMER}</sub>"
                 )
-                edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
+                if placeholder_id:
+                    edit_comment(owner, repo, placeholder_id, fallback_body, github_token)
                 set_commit_status(owner, repo, head_sha, "success", "Review complete", github_token)
                 return
 
@@ -2775,14 +2756,15 @@ def main() -> None:
     except Exception as exc:
         print(f"  Review failed: {exc}", file=sys.stderr)
         error_body = (
-            f"<h2>{logo} AI PR Review</h2>\n\n"
+            f"<h2>{logo} HawkEye Review</h2>\n\n"
             f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
             "This may be a transient issue. Type `/claude-review` in a comment to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
         try:
-            edit_comment(owner, repo, placeholder_id, error_body, github_token)
+            if placeholder_id:
+                edit_comment(owner, repo, placeholder_id, error_body, github_token)
             set_commit_status(owner, repo, head_sha, "error", "Review failed — type /claude-review to retry", github_token)
         except Exception as cleanup_exc:
             print(f"  Cleanup also failed: {cleanup_exc}", file=sys.stderr)

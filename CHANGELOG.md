@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.1] - 2026-03-19
+
+### Internal / Cleanup
+
+- **README restructured** — split Setup into "Enroll Your Repo" (developer-facing, 3 steps) and "Administrator Setup" (one-time deployment guide)
+- **Bug fixes and optimizations** — `URLError` now caught in `_github_request`, `read_repo_variables` parallelized with `ThreadPoolExecutor`, stale `_review_map_reduce_inner` type annotation fixed
+
+---
+
 ## [1.4.0] - 2026-03-19
 
 ### New Features

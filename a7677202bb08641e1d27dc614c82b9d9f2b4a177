@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "a7677202bb08641e1d27dc614c82b9d9f2b4a177",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T19:58:56+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude-code",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 22,
+    "total_deletions": 0,
+    "ai_additions": 22,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 10,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "12,17,33,128,299,359,418,429,489,500",
+      "human_lines": ""
+    },
+    "scripts/claude_pr_review.py": {
+      "ai_additions": 7,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "414-415,1648,1659,2748,2761,2768",
+      "human_lines": ""
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 5,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "377,604,727,737,744",
+      "human_lines": ""
+    }
+  }
+}

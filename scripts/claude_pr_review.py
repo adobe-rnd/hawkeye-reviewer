@@ -411,8 +411,8 @@ LINTER_CONFIG_MAX_PER_FILE = 3000
 LINTER_CONFIG_MAX_TOTAL = 12_000
 
 GUIDELINES_PATHS = [
-    ".github/claude-review.md",
-    ".claude-review.md",
+    ".github/hawkeye-review.md",
+    ".hawkeye-review.md",
 ]
 
 GUIDELINES_MAX_CHARS = 4000
@@ -1645,7 +1645,7 @@ def format_summary_comment(
         parts.append(
             "\n---\n\u26a0\ufe0f Review incomplete — some batches failed. "
             "No issues found in the files that were reviewed, but not all files "
-            "could be analyzed. Type `/claude-review` to retry."
+            "could be analyzed. Type `/hawkeye-review` to retry."
         )
     else:
         parts.append(
@@ -1656,7 +1656,7 @@ def format_summary_comment(
     mode_text = f" | {review_mode}" if review_mode else ""
     parts.append(
         f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock{mode_text}"
-        f" | Type `/claude-review` in a comment to re-review after new commits | v{VERSION}</sub>\n\n"
+        f" | Type `/hawkeye-review` in a comment to re-review after new commits | v{VERSION}</sub>\n\n"
         f"<sub>{AI_DISCLAIMER}</sub>"
     )
 
@@ -2745,7 +2745,7 @@ def main() -> None:
         if use_map_reduce and failed_b:
             set_commit_status(
                 owner, repo, head_sha, "failure",
-                f"Partial review — {failed_b}/{num_batches} batches failed, retry with /claude-review",
+                f"Partial review — {failed_b}/{num_batches} batches failed, retry with /hawkeye-review",
                 github_token,
             )
         else:
@@ -2758,14 +2758,14 @@ def main() -> None:
         error_body = (
             f"<h2>{logo} HawkEye Review</h2>\n\n"
             f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
-            "This may be a transient issue. Type `/claude-review` in a comment to retry.\n\n"
+            "This may be a transient issue. Type `/hawkeye-review` in a comment to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
             f"<sub>{AI_DISCLAIMER}</sub>"
         )
         try:
             if placeholder_id:
                 edit_comment(owner, repo, placeholder_id, error_body, github_token)
-            set_commit_status(owner, repo, head_sha, "error", "Review failed — type /claude-review to retry", github_token)
+            set_commit_status(owner, repo, head_sha, "error", "Review failed — type /hawkeye-review to retry", github_token)
         except Exception as cleanup_exc:
             print(f"  Cleanup also failed: {cleanup_exc}", file=sys.stderr)
         sys.exit(1)

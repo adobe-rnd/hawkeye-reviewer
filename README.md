@@ -9,12 +9,12 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 ## Features
 
 - **Automatic reviews** on every PR (opened, reopened, ready for review)
-- **On-demand reviews** via `/claude-review` comment for re-reviewing after new commits
+- **On-demand reviews** via `/hawkeye-review` comment for re-reviewing after new commits
 - **Map-reduce pipeline** — handles large PRs (8+ files or 1500+ changes) with parallel batch reviews and cross-file consolidation
 - **Smart token optimization** — 30-40% token savings via expanded diff context, structural signatures, and intelligent truncation
 - **Full repository awareness** — directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs
 - **Linter-aware suggestions** — fetches your project's linter/formatter configs (64+ patterns across 10+ languages) so every `suggestion` block respects your rules
-- **Custom guidelines** — optional `.github/claude-review.md` for repo-specific review instructions
+- **Custom guidelines** — optional `.github/hawkeye-review.md` for repo-specific review instructions
 - **Inline code suggestions** with GitHub's native suggestion blocks (one-click apply)
 - **5 severity levels** — critical, warning, suggestion, design, nitpick — each with distinct icons
 - **Senior-level review checklist** — security, concurrency, edge cases, resource management, test coverage, API contracts, design, and dead code
@@ -30,7 +30,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 
 The bot runs as a **standalone webhook server** (`webhook_server.py`) that receives GitHub webhooks directly and triggers the review script as a subprocess.
 
-1. GitHub sends a webhook event (PR opened, `/claude-review` comment) to the server
+1. GitHub sends a webhook event (PR opened, `/hawkeye-review` comment) to the server
 2. The server validates the HMAC signature, generates a GitHub App installation token, posts a placeholder comment, and queues the review
 3. `claude_pr_review.py` assembles the prompt, calls Claude via Bedrock, and posts inline review comments
 
@@ -125,7 +125,7 @@ Both scripts communicate with two external systems:
 |-------|----------|
 | PR opened / reopened / ready for review | Posts a placeholder comment, runs a full review, sets commit status to `success` |
 | New commits pushed (`synchronize`) | Sets commit status to `pending` (invalidates previous review). No new review runs automatically. |
-| `/claude-review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
+| `/hawkeye-review` comment | Runs a full review on the current PR head. Deduplicates against existing comments. |
 
 ### Review output
 
@@ -296,7 +296,7 @@ The reviewer assembles a rich context window for Claude, organized into budget-c
 | Imported modules | 20K | Local modules referenced by `import`/`require()` in changed files |
 | Linter/formatter configs | 12K | Active linter rules from 64+ config file patterns |
 | Project documentation | 8K | `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `CLAUDE.md`, `.cursorrules` |
-| Custom guidelines | 4K | `.github/claude-review.md` — team-specific review instructions |
+| Custom guidelines | 4K | `.github/hawkeye-review.md` — team-specific review instructions |
 | Related context | 15K | Auto-inferred test files and build configs |
 | Changed files (PR diff) | 180K | Full content + unified diff (smart context for large files) |
 
@@ -356,7 +356,7 @@ When the Git Trees API is available, all 64+ patterns are checked via fast set l
 
 ## Custom review guidelines
 
-For anything auto-detection can't cover, create a **`.github/claude-review.md`** (or `.claude-review.md` at the repo root) with free-form instructions:
+For anything auto-detection can't cover, create a **`.github/hawkeye-review.md`** (or `.hawkeye-review.md` at the repo root) with free-form instructions:
 
 ```markdown
 - This project targets Python 3.11+
@@ -415,7 +415,7 @@ After Claude responds, every comment is validated in code:
 The consolidation pass removes comments that flag the same issue on the same line across batches, and drops false positives that look incorrect given the full cross-file context.
 
 ### Custom guidelines (your escape hatch)
-Create `.github/claude-review.md` to suppress entire categories or set project-specific rules:
+Create `.github/hawkeye-review.md` to suppress entire categories or set project-specific rules:
 
 ```markdown
 - Skip architecture/design suggestions, focus only on correctness
@@ -426,7 +426,7 @@ Create `.github/claude-review.md` to suppress entire categories or set project-s
 Guidelines take precedence over all default review behavior.
 
 ### Design tradeoff
-The reviewer intentionally errs toward thoroughness over conservatism — it would rather surface a potential concern that turns out to be fine than miss a real bug or security issue. Noise is managed structurally (scope, style filter, linter compliance, dedup, custom guidelines) rather than by asking Claude to hold back. If you find the volume too high, the main lever is `.github/claude-review.md`.
+The reviewer intentionally errs toward thoroughness over conservatism — it would rather surface a potential concern that turns out to be fine than miss a real bug or security issue. Noise is managed structurally (scope, style filter, linter compliance, dedup, custom guidelines) rather than by asking Claude to hold back. If you find the volume too high, the main lever is `.github/hawkeye-review.md`.
 
 ## Cost and latency
 
@@ -486,7 +486,7 @@ Costs scale with PR size and model choice. Latency is dominated by the Claude AP
 ### Reducing cost
 
 - Use a smaller/faster model (e.g. Claude Haiku) via the `HAWKEYE_CLAUDE_API_URL` repo variable
-- Add a `.github/claude-review.md` to skip whole review categories (e.g. "skip design suggestions") — fewer relevant findings means fewer tokens spent reasoning about them
+- Add a `.github/hawkeye-review.md` to skip whole review categories (e.g. "skip design suggestions") — fewer relevant findings means fewer tokens spent reasoning about them
 - The smart file inclusion and structural signatures features already save an estimated 40–60% of file content tokens compared to sending full source for every file
 
 ## Optional: require review before merge
@@ -497,7 +497,7 @@ To use Claude's review as a merge gate:
 2. Enable **Require status checks to pass before merging**
 3. Search for and add `HawkEye Review`
 
-When new commits are pushed, the status is automatically set to `pending`, requiring either a new `/claude-review` or a new PR event to pass.
+When new commits are pushed, the status is automatically set to `pending`, requiring either a new `/hawkeye-review` or a new PR event to pass.
 
 ## Supported models
 

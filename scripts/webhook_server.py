@@ -374,7 +374,7 @@ def post_pending_status(
     _github_request("POST", url, token, {
         "state": "pending",
         "context": "HawkEye Review",
-        "description": "Type /claude-review to review latest changes",
+        "description": "Type /hawkeye-review to review latest changes",
     }, ca_bundle=ca_bundle)
 
 
@@ -601,7 +601,7 @@ def invoke_review(
             err_body = (
                 "<h2>❌ HawkEye Reviewer — review failed</h2>\n\n"
                 f"{message}\n\n"
-                "Type `/claude-review` in a comment to retry."
+                "Type `/hawkeye-review` in a comment to retry."
             )
             _github_request(
                 "PATCH",
@@ -724,7 +724,7 @@ def _handle_issue_comment(
 
     if action != "created":
         return
-    if "/claude-review" not in comment.get("body", ""):
+    if "/hawkeye-review" not in comment.get("body", ""):
         return
     if "pull_request" not in issue:
         return  # Comment on issue, not a PR
@@ -734,14 +734,14 @@ def _handle_issue_comment(
     allowed_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
     if comment.get("author_association", "") not in allowed_associations:
         info(
-            f"PR #{issue.get('number')} — /claude-review ignored "
+            f"PR #{issue.get('number')} — /hawkeye-review ignored "
             f"(author_association={comment.get('author_association')!r})",
             env=env_name, repo=repo_ctx,
         )
         return
 
     pr_number = issue.get("number")
-    info(f"PR #{pr_number} /claude-review comment — triggering review", env=env_name, repo=repo_ctx)
+    info(f"PR #{pr_number} /hawkeye-review comment — triggering review", env=env_name, repo=repo_ctx)
     token = get_cached_installation_token(env_name, env_cfg, installation_id)
     placeholder_id = post_placeholder_comment(
         env_cfg["github_api_url"], token, owner, repo, pr_number,

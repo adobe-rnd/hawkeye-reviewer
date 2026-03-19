@@ -788,24 +788,26 @@ def _handle_issue_comment(
 
     if action != "created":
         return
-    if "/hawkeye-review" not in comment.get("body", ""):
-        return
     if "pull_request" not in issue:
         return  # Comment on issue, not a PR
+
+    body = comment.get("body", "").lower()
+    if "@hawkeye review" not in body:
+        return
 
     # Only allow org members, collaborators, and repo owners to trigger reviews.
     # This prevents fork PR commenters from triggering paid Bedrock calls.
     allowed_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
     if comment.get("author_association", "") not in allowed_associations:
         info(
-            f"PR #{issue.get('number')} — /hawkeye-review ignored "
+            f"PR #{issue.get('number')} — @hawkeye review ignored "
             f"(author_association={comment.get('author_association')!r})",
             env=env_name, repo=repo_ctx,
         )
         return
 
     pr_number = issue.get("number")
-    info(f"PR #{pr_number} /hawkeye-review comment — triggering review", env=env_name, repo=repo_ctx)
+    info(f"PR #{pr_number} @hawkeye review comment — triggering review", env=env_name, repo=repo_ctx)
     token = get_cached_installation_token(env_name, env_cfg, installation_id)
     placeholder_id = post_placeholder_comment(
         env_cfg["github_api_url"], token, owner, repo, pr_number,

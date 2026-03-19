@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "849405775d4d45df8efe3c872ce0c06abafcdb04",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-19T17:07:23+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 1333,
+    "total_deletions": 0,
+    "ai_additions": 1163,
+    "ai_deletions": 0,
+    "human_additions": 170,
+    "human_deletions": 0
+  },
+  "files": {
+    "Dockerfile": {
+      "ai_additions": 21,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-21",
+      "human_lines": ""
+    },
+    "action.yml": {
+      "ai_additions": 7,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "21-24,47,65,76",
+      "human_lines": ""
+    },
+    "config.example.json": {
+      "ai_additions": 39,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-39",
+      "human_lines": ""
+    },
+    "deploy/azure-setup.sh": {
+      "ai_additions": 123,
+      "human_additions": 7,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-115,122-129",
+      "human_lines": "130-136"
+    },
+    "docker-compose.example.yml": {
+      "ai_additions": 42,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-42",
+      "human_lines": ""
+    },
+    "scripts/claude_pr_review.py": {
+      "ai_additions": 3,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "20-22",
+      "human_lines": ""
+    },
+    "scripts/encrypt_token.py": {
+      "ai_additions": 150,
+      "human_additions": 2,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-150",
+      "human_lines": "151-152"
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 778,
+      "human_additions": 161,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-682,684-779",
+      "human_lines": "780-940"
+    }
+  }
+}

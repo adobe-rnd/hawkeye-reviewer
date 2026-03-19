@@ -196,10 +196,13 @@ def generate_github_app_jwt(app_id: str, pem_path: str | None) -> str:
     if pem_contents:
         # Key provided as env var — write to a temp file for openssl
         import tempfile
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
-            f.write(pem_contents.replace("\\n", "\n"))
-            tmp_path = f.name
-        os.chmod(tmp_path, 0o600)
+        fd, tmp_path = tempfile.mkstemp(suffix=".pem")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(pem_contents.replace("\\n", "\n"))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
         try:
             result = subprocess.run(
                 ["openssl", "dgst", "-sha256", "-sign", tmp_path, "-binary"],
@@ -278,6 +281,7 @@ def get_installation_token(
         dt = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         expires_at = dt.timestamp()
     except (ValueError, TypeError):
+        print(f"WARNING: could not parse token expiry {expires_str!r}, defaulting to 1 hour", file=sys.stderr)
         expires_at = time.time() + 3600
     return token, expires_at
 
@@ -422,10 +426,13 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
         raise RuntimeError(f"Invalid base64 in encrypted blob: {exc}") from exc
 
     import tempfile
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
-        f.write(private_key_pem)
-        key_path = f.name
-    os.chmod(key_path, 0o600)
+    fd, key_path = tempfile.mkstemp(suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(private_key_pem)
+    except Exception:
+        os.unlink(key_path)
+        raise
     try:
         # Decrypt the AES key+IV with RSA-OAEP
         result = subprocess.run(
@@ -964,6 +971,8 @@ def main() -> None:
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        pass
+    finally:
         info("Shutting down...")
         executor.shutdown(wait=False)
         server.server_close()

@@ -212,7 +212,10 @@ def get_changed_files(owner: str, repo: str, pr_number: int, token: str) -> list
     files: list[dict] = []
     page = 1
     while True:
-        batch = github_get(url, token, params={"page": str(page), "per_page": "100"})
+        try:
+            batch = github_get(url, token, params={"page": str(page), "per_page": "100"})
+        except RuntimeError as exc:
+            raise RuntimeError(f"Failed to fetch changed files (page {page}): {exc}") from exc
         if not batch:
             break
         files.extend(batch)
@@ -261,7 +264,7 @@ def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> 
 
     if content:
         with _file_content_lock:
-            _file_content_cache[cache_key] = content
+            _file_content_cache.setdefault(cache_key, content)
 
     return content
 
@@ -839,7 +842,7 @@ def _sibling_relevance(candidate: str, changed_names: list[set[str]]) -> float:
         union = cand_words | changed_words
         best = max(best, len(intersection) / len(union))
 
-    return best + 0.5
+    return best
 
 
 def get_sibling_files(
@@ -1057,8 +1060,6 @@ def get_diff_lines(patch: str) -> set[int]:
         if raw.startswith("-") and not raw.startswith("---"):
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
-            lines.add(current_line)
-        else:
             lines.add(current_line)
         current_line += 1
     return lines
@@ -2623,7 +2624,11 @@ def main() -> None:
     set_commit_status(owner, repo, head_sha, "pending", f"{model_name} is reviewing this PR...", github_token)
 
     placeholder_id_str = os.environ.get("PLACEHOLDER_COMMENT_ID", "")
-    placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
+    try:
+        placeholder_id = int(placeholder_id_str) if placeholder_id_str else None
+    except ValueError:
+        print(f"Invalid PLACEHOLDER_COMMENT_ID: {placeholder_id_str!r}", file=sys.stderr)
+        placeholder_id = None
 
     logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
     footer_logo = f'<img src="{BOT_AVATAR}" width="13" height="13" align="absmiddle">'

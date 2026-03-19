@@ -9,7 +9,8 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 ## Features
 
 - **Automatic reviews** on every PR (opened, reopened, ready for review)
-- **On-demand reviews** via `@hawkeye review` comment to trigger or re-trigger a review
+- **On-demand reviews** via `@hawkeye review` comment or the "Re-request review" button in the Reviewers sidebar
+- **Appears as a reviewer** — HawkEye requests itself as a reviewer when a PR is opened, showing up in the Reviewers sidebar like Copilot
 - **Map-reduce pipeline** — handles large PRs (8+ files or 1500+ changes) with parallel batch reviews and cross-file consolidation
 - **Smart token optimization** — 30-40% token savings via expanded diff context, structural signatures, and intelligent truncation
 - **Full repository awareness** — directory tree, sibling files, and imported modules so Claude understands your project structure, coding patterns, and internal APIs
@@ -22,7 +23,6 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 - **Instant feedback** — posts a placeholder comment immediately while Claude analyzes
 - **Version label and AI disclaimer** — every comment shows the reviewer version and an AI-generated content notice
 - **Merge gate** — sets a commit status (`HawkEye Review`) that can be required in branch protection rules
-- **Smart invalidation** — new commits automatically set the status to "pending" so stale reviews don't block merges
 - **Draft PR aware** — skips draft PRs to avoid wasting API calls
 - **Zero dependencies** — uses only Python's standard library (no `pip install`)
 
@@ -69,8 +69,11 @@ Run the webhook server with these environment variables:
 | `SERVER_PRIVATE_KEY` | No* | RSA-4096 private key for decrypting per-repo Claude credentials |
 | `CLAUDE_API_URL` | No* | Server-wide fallback Bedrock endpoint |
 | `CLAUDE_API_TOKEN` | No* | Server-wide fallback Bedrock token |
+| `GITHUB_APP_SLUG` | No | GitHub App slug (e.g. `hawkeye-reviewer`). Enables auto-requesting HawkEye as a reviewer on PR open and the "Re-request review" button |
 
 \* At least one credential source must be configured: either `SERVER_PRIVATE_KEY` (enables per-repo encrypted credentials) or `CLAUDE_API_URL` + `CLAUDE_API_TOKEN` (server-wide fallback), or both.
+
+> **Finding your app slug:** Go to your GitHub App's General settings page. The slug is the last segment of the public link URL shown there (e.g. if the URL is `https://github.com/apps/hawkeye-reviewer`, the slug is `hawkeye-reviewer`).
 
 Generate `SERVER_PRIVATE_KEY` once and store it permanently:
 
@@ -107,6 +110,26 @@ Example `HAWKEYE_CLAUDE_API_URL`:
 https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-20250514-v1:0/converse
 ```
 
+### 4. Deployment (Azure App Service)
+
+HawkEye is designed to run as a long-lived process on Azure App Service (Linux). The recommended setup:
+
+1. **Startup command:** `python3 scripts/webhook_server.py`
+2. **Environment variables:** Set all variables from the table above in **Configuration → Environment variables** in the App Service portal
+3. **Port:** The server listens on `PORT` env var (defaults to `8080`). Azure App Service sets `PORT` automatically — no change needed
+4. **Health check:** Configure a health check at `/health` in **Monitoring → Health check**
+
+When deploying updates, the App Service will restart automatically on the next GitHub Actions deploy run.
+
+### 5. GitHub App IP Allow List (organizations with IP restrictions)
+
+If your GitHub organization enforces an IP allow list (e.g. enterprise or security-hardened orgs), you must add your server's outbound IPs to the GitHub App's allow list:
+
+1. Go to your GitHub App → **Advanced** → **IP allow list**
+2. Add each of your server's outbound IPs
+
+For Azure App Service, outbound IPs are listed in **Properties → Outbound IP addresses** and **Additional Outbound IP Addresses** in the portal. Add all of them — Azure may use any of these IPs for outbound connections.
+
 ## Architecture
 
 The reviewer consists of two scripts:
@@ -134,7 +157,7 @@ Both scripts communicate with two external systems:
 2. **Inline comments** — posted on the relevant lines in the diff, with optional `suggestion` blocks for one-click fixes
 3. **Commit status** — `HawkEye Review` on the head commit (`success`, `pending`, or `error`)
 
-Every comment includes the reviewer version (e.g. `v1.3.0`) and an AI-generated content disclaimer.
+Every comment includes the reviewer version (e.g. `v1.4.0`) and an AI-generated content disclaimer.
 
 ## Review flow
 
@@ -492,13 +515,13 @@ Costs scale with PR size and model choice. Latency is dominated by the Claude AP
 
 ## Optional: require review before merge
 
-To use Claude's review as a merge gate:
+To use HawkEye's review as a merge gate:
 
-1. Go to **Settings > Branches > Branch protection rules**
+1. Go to **Settings → Branches → Branch protection rules**
 2. Enable **Require status checks to pass before merging**
 3. Search for and add `HawkEye Review`
 
-When new commits are pushed, no automatic re-review runs. Use `@hawkeye review` in a comment or click "Re-request review" in the sidebar to trigger a new review.
+HawkEye sets the `HawkEye Review` commit status to `success` after each completed review. Pushing new commits does **not** trigger a re-review automatically — the status from the last review remains in place. To get a fresh review after new commits, use `@hawkeye review` in a PR comment or click "Re-request review" next to HawkEye in the Reviewers sidebar.
 
 ## Supported models
 

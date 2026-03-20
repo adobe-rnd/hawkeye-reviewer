@@ -1592,6 +1592,7 @@ def call_claude(prompt: str, api_url: str, api_token: str) -> str:
         for c in contents:
             if isinstance(c, dict) and c.get("text"):
                 return c["text"]
+        print("  WARNING: Claude response contained no text content blocks.", file=sys.stderr)
     except Exception as exc:
         print(f"  WARNING: unexpected Claude response structure: {exc}", file=sys.stderr)
 

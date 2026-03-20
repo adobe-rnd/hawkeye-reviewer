@@ -647,16 +647,30 @@ def invoke_review(
                 info(line, env=env_name, repo=repo_ctx)
         for line in (result.stderr or "").splitlines():
             if line.strip():
-                info(line, env=env_name, repo=repo_ctx)
+                warn(line, env=env_name, repo=repo_ctx)
         if result.returncode != 0:
             warn(f"Review subprocess exited {result.returncode}", env=env_name, repo=repo_ctx)
             _update_placeholder_error(f"The review script exited with code `{result.returncode}`.")
         else:
             info("Review complete", env=env_name, repo=repo_ctx)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        for line in (exc.stdout or "").splitlines():
+            if line.strip():
+                info(line, env=env_name, repo=repo_ctx)
+        for line in (exc.stderr or "").splitlines():
+            if line.strip():
+                warn(line, env=env_name, repo=repo_ctx)
         error("Review subprocess timed out after 600s", env=env_name, repo=repo_ctx)
         _update_placeholder_error("The review timed out after 10 minutes.")
     except Exception as exc:
+        stdout = getattr(exc, "stdout", None)
+        stderr = getattr(exc, "stderr", None)
+        for line in (stdout or "").splitlines():
+            if line.strip():
+                info(line, env=env_name, repo=repo_ctx)
+        for line in (stderr or "").splitlines():
+            if line.strip():
+                warn(line, env=env_name, repo=repo_ctx)
         error(f"Review subprocess error: {exc}", env=env_name, repo=repo_ctx)
         _update_placeholder_error(f"Unexpected error: `{exc}`.")
 

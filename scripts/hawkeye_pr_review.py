@@ -1056,12 +1056,12 @@ def get_diff_lines(patch: str) -> set[int]:
         if hunk_match:
             current_line = int(hunk_match.group(1))
             continue
-        if raw.startswith("-") and not raw.startswith("---"):
+        if raw.startswith("-") and not raw.startswith("--- "):
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+") and not raw.startswith("+++ "):
             lines.add(current_line)
             current_line += 1
-        elif not raw.startswith("+++"):
+        elif not raw.startswith("+++ "):
             current_line += 1
     return lines
 

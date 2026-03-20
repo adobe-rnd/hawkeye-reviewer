@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "efdaef895bfae769864259d3c702105d531bf1dd",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-20T16:23:30+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 95,
+    "total_deletions": 0,
+    "ai_additions": 22,
+    "ai_deletions": 0,
+    "human_additions": 73,
+    "human_deletions": 0
+  },
+  "files": {
+    "CHANGELOG.md": {
+      "ai_additions": 9,
+      "human_additions": 73,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "2-10",
+      "human_lines": "1,11-82"
+    },
+    "README.md": {
+      "ai_additions": 1,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "83",
+      "human_lines": ""
+    },
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 3,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "26,1595-1596",
+      "human_lines": ""
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 9,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "641-643,645-650",
+      "human_lines": ""
+    }
+  }
+}

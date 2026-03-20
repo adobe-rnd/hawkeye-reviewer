@@ -638,7 +638,16 @@ def invoke_review(
             [sys.executable, script_path, owner, repo, str(pr_number)],
             env=env,
             timeout=600,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        for line in (result.stdout or "").splitlines():
+            if line.strip():
+                info(line, env=env_name, repo=repo_ctx)
+        for line in (result.stderr or "").splitlines():
+            if line.strip():
+                info(line, env=env_name, repo=repo_ctx)
         if result.returncode != 0:
             warn(f"Review subprocess exited {result.returncode}", env=env_name, repo=repo_ctx)
             _update_placeholder_error(f"The review script exited with code `{result.returncode}`.")

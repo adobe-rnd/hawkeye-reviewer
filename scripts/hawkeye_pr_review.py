@@ -1060,7 +1060,9 @@ def get_diff_lines(patch: str) -> set[int]:
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
             lines.add(current_line)
-        current_line += 1
+            current_line += 1
+        elif not raw.startswith("+++"):
+            current_line += 1
     return lines
 
 
@@ -2665,6 +2667,7 @@ def main() -> None:
         )
 
         review_mode = ""
+        failed_b = 0
 
         if use_map_reduce:
             batches = group_files_into_batches(files)

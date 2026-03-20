@@ -2485,7 +2485,7 @@ def _review_map_reduce_inner(
     total_batches = len(batches)
     if total_batches == 0:
         print("  Map-reduce: 0 batches (deletions-only PR) — nothing to review.", file=sys.stderr)
-        return {}, [], 0, 0
+        return {}, [], 0
 
     print(f"  Map-reduce: {total_batches} batch(es).", file=sys.stderr)
 
@@ -2581,7 +2581,7 @@ def _review_map_reduce_inner(
     comments = reduce_result.get("comments", [])
     print(f"  Reduce phase complete: {len(comments)} final comment(s).", file=sys.stderr)
 
-    return summary, comments, total_batches, failed_batches
+    return summary, comments, failed_batches
 
 
 # ---------------------------------------------------------------------------

@@ -748,7 +748,7 @@ SKIP_BINARY_EXTENSIONS = {
     # Databases
     ".sqlite", ".sqlite3", ".db",
     # Other binary
-    ".bin", ".dat", ".ds_store",
+    ".bin", ".dat",
 }
 
 # Minified / bundled / source map patterns (checked via suffix on basename)
@@ -778,11 +778,16 @@ SKIP_GENERATED_SUFFIXES = (
 def _should_skip_file(path: str) -> str | None:
     """Return a reason string if the file should be skipped, or None if reviewable."""
     basename = os.path.basename(path)
+    basename_lower = basename.lower()
     _, ext = os.path.splitext(basename)
     ext_lower = ext.lower()
 
     if basename in SKIP_LOCK_FILES:
         return "lock file"
+
+    # Dotfiles like .DS_Store have no extension via splitext — match by basename
+    if basename_lower in (".ds_store",):
+        return "binary file"
 
     if ext_lower in SKIP_BINARY_EXTENSIONS:
         return "binary file"
@@ -1757,23 +1762,23 @@ def format_summary_comment(
             f"\n---\n{len(comments)} inline comment{'s' if len(comments) != 1 else ''} "
             f"posted ({breakdown})."
         )
-    elif partial:
-        msg = (
-            "\n---\n\u26a0\ufe0f Review incomplete — some batches failed. "
-            "No issues found in the files that were reviewed, but not all files "
-            "could be analyzed. Comment `@hawkeye review` to retry."
-        )
-        if failed_files:
-            file_list = "\n".join(f"- `{f}`" for f in failed_files)
-            msg += (
-                f"\n\n<details><summary>Files not reviewed ({len(failed_files)})"
-                f"</summary>\n\n{file_list}\n\n</details>"
-            )
-        parts.append(msg)
     else:
         parts.append(
             "\n---\n\u2705 No issues found — looks good!"
         )
+
+    if partial:
+        msg = (
+            "\n\u26a0\ufe0f **Review incomplete** — some batches failed. "
+            "Not all files could be analyzed. Comment `@hawkeye review` to retry."
+        )
+        if failed_files:
+            file_list = "\n".join(f"- `{f}`" for f in failed_files)
+            msg += (
+                f"\n\n<details><summary>Files in failed batches ({len(failed_files)})"
+                f"</summary>\n\n{file_list}\n\n</details>"
+            )
+        parts.append(msg)
 
     footer_logo = f'<img src="{BOT_AVATAR}" width="13" height="13" align="absmiddle">'
     mode_text = f" | {review_mode}" if review_mode else ""
@@ -2783,10 +2788,16 @@ def main() -> None:
         reviewable_count = sum(1 for f in files if f.get("status") != "removed")
 
         if reviewable_count == 0:
-            if skipped_by_rule:
+            has_removals = any(f.get("status") == "removed" for f in files)
+            if skipped_by_rule and not has_removals and not files:
                 overview = (
                     f"All changed files were filtered out ({len(skipped_by_rule)} skipped). "
                     "No reviewable source code to analyze."
+                )
+            elif skipped_by_rule and has_removals:
+                overview = (
+                    f"This PR removes files and {len(skipped_by_rule)} additional "
+                    "file(s) were filtered out — no reviewable source code to analyze."
                 )
             else:
                 overview = "This PR only removes files — no code to review."

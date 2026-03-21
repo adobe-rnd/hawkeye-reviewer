@@ -705,7 +705,7 @@ SKIP_TREE_DIRS = {
     ".DS_Store", ".cache", ".parcel-cache", ".turbo", ".vercel",
     "eggs", ".eggs", "__snapshots__", ".terraform",
     # Python virtual environments
-    ".venv", "venv", ".env", ".virtualenv",
+    ".venv", "venv", ".virtualenv",
     # Additional build / generated
     ".angular", ".svelte-kit", ".expo", "storybook-static",
 }
@@ -726,13 +726,13 @@ SKIP_LOCK_FILES = {
     "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     "Cargo.lock", "go.sum", "poetry.lock", "Pipfile.lock",
     "composer.lock", "Gemfile.lock", "pubspec.lock",
-    "Mix.lock", "flake.lock", "bun.lockb", "shrinkwrap.yaml",
+    "Mix.lock", "flake.lock", "bun.lockb", "npm-shrinkwrap.json",
 }
 
 # Binary file extensions
 SKIP_BINARY_EXTENSIONS = {
     # Images
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
     ".tiff", ".tif", ".avif", ".heic", ".heif",
     # Fonts
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
@@ -748,7 +748,7 @@ SKIP_BINARY_EXTENSIONS = {
     # Databases
     ".sqlite", ".sqlite3", ".db",
     # Other binary
-    ".bin", ".dat", ".DS_Store",
+    ".bin", ".dat", ".ds_store",
 }
 
 # Minified / bundled / source map patterns (checked via suffix on basename)
@@ -1983,6 +1983,8 @@ def build_retry_prompt(
     """Build a shorter, diff-only prompt for the second-pass review."""
     diffs: list[str] = []
     total_additions = sum(f.get("additions", 0) for f in files)
+    max_diffs_chars = REDUCE_MAX_DIFFS_CHARS  # reuse the reduce-phase budget
+    diffs_chars = 0
 
     for f in files:
         if f.get("status") == "removed":
@@ -1992,7 +1994,12 @@ def build_retry_prompt(
             continue
         path = f["filename"]
         status = f.get("status", "modified")
-        diffs.append(f"FILE: {path} (status: {status})\nDIFF:\n{patch}\n")
+        block = f"FILE: {path} (status: {status})\nDIFF:\n{patch}\n"
+        if diffs_chars + len(block) > max_diffs_chars:
+            diffs.append("... (remaining files truncated to fit budget)")
+            break
+        diffs.append(block)
+        diffs_chars += len(block)
 
     diffs_text = "\n".join(diffs) if diffs else "(no diffs)"
 
@@ -2638,11 +2645,11 @@ def _review_map_reduce_inner(
         if i in results_by_idx:
             batch_results.append(results_by_idx[i])
 
-    failed_files = [
+    failed_files = sorted(
         f["filename"]
         for idx in failed_batch_indices
         for f in batches[idx]
-    ]
+    )
 
     if failed_batches:
         print(f"  Map phase: {failed_batches} batch(es) failed.", file=sys.stderr)
@@ -2776,9 +2783,16 @@ def main() -> None:
         reviewable_count = sum(1 for f in files if f.get("status") != "removed")
 
         if reviewable_count == 0:
-            print("  No reviewable files (deletions only) — skipping review.", file=sys.stderr)
+            if skipped_by_rule:
+                overview = (
+                    f"All changed files were filtered out ({len(skipped_by_rule)} skipped). "
+                    "No reviewable source code to analyze."
+                )
+            else:
+                overview = "This PR only removes files — no code to review."
+            print(f"  No reviewable files — skipping review.", file=sys.stderr)
             summary_body = format_summary_comment(
-                {"overview": "This PR only removes files — no code to review."},
+                {"overview": overview},
                 [], model_name,
             )
             post_review(owner, repo, pr_number, head_sha, summary_body, [], github_token, placeholder_id)

@@ -704,6 +704,10 @@ SKIP_TREE_DIRS = {
     "vendor", ".gradle", "target", ".idea", ".vscode",
     ".DS_Store", ".cache", ".parcel-cache", ".turbo", ".vercel",
     "eggs", ".eggs", "__snapshots__", ".terraform",
+    # Python virtual environments
+    ".venv", "venv", ".env", ".virtualenv",
+    # Additional build / generated
+    ".angular", ".svelte-kit", ".expo", "storybook-static",
 }
 
 SOURCE_EXTENSIONS = {
@@ -712,6 +716,93 @@ SOURCE_EXTENSIONS = {
     ".rb", ".php", ".cs", ".swift", ".c", ".cpp", ".h", ".hpp",
     ".vue", ".svelte", ".astro",
 }
+
+# ---------------------------------------------------------------------------
+# File skip rules — files that should never be sent to the model
+# ---------------------------------------------------------------------------
+
+# Lock files (exact basename match)
+SKIP_LOCK_FILES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "Cargo.lock", "go.sum", "poetry.lock", "Pipfile.lock",
+    "composer.lock", "Gemfile.lock", "pubspec.lock",
+    "Mix.lock", "flake.lock", "bun.lockb", "shrinkwrap.yaml",
+}
+
+# Binary file extensions
+SKIP_BINARY_EXTENSIONS = {
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+    ".tiff", ".tif", ".avif", ".heic", ".heif",
+    # Fonts
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    # Documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt",
+    # Archives
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
+    # Audio/Video
+    ".mp3", ".mp4", ".wav", ".avi", ".mov", ".mkv", ".flac", ".ogg", ".webm",
+    # Compiled / object files
+    ".o", ".a", ".so", ".dylib", ".dll", ".exe", ".class", ".pyc", ".pyo",
+    ".wasm", ".jar",
+    # Databases
+    ".sqlite", ".sqlite3", ".db",
+    # Other binary
+    ".bin", ".dat", ".DS_Store",
+}
+
+# Minified / bundled / source map patterns (checked via suffix on basename)
+SKIP_MINIFIED_SUFFIXES = (
+    ".min.js", ".min.css", ".min.mjs",
+    ".bundle.js", ".bundle.css", ".bundle.mjs",
+    ".chunk.js", ".chunk.css", ".chunk.mjs",
+    ".js.map", ".css.map", ".mjs.map",
+)
+
+# Generated code extensions
+SKIP_GENERATED_EXTENSIONS = {
+    ".pb.go", ".pb.cc", ".pb.h", ".pb.py",
+    ".pb.ts", ".pb.js", ".pb.rs",
+    ".grpc.go",
+    ".generated.ts", ".generated.js",
+}
+
+# Generated code patterns (checked via suffix on basename, after extension check)
+SKIP_GENERATED_SUFFIXES = (
+    "_generated.go", "_generated.ts", "_generated.js",
+    "_gen.go", "_gen.ts", "_gen.js",
+    ".g.dart",
+)
+
+
+def _should_skip_file(path: str) -> str | None:
+    """Return a reason string if the file should be skipped, or None if reviewable."""
+    basename = os.path.basename(path)
+    _, ext = os.path.splitext(basename)
+    ext_lower = ext.lower()
+
+    if basename in SKIP_LOCK_FILES:
+        return "lock file"
+
+    if ext_lower in SKIP_BINARY_EXTENSIONS:
+        return "binary file"
+
+    for suffix in SKIP_MINIFIED_SUFFIXES:
+        if basename.endswith(suffix):
+            return "source map" if suffix.endswith(".map") else "minified/bundled file"
+
+    # Two-part extensions like .pb.go — check against the last two parts
+    parts = basename.rsplit(".", 2)
+    if len(parts) >= 3:
+        double_ext = f".{parts[-2]}.{parts[-1]}"
+        if double_ext.lower() in SKIP_GENERATED_EXTENSIONS:
+            return "generated code"
+
+    for suffix in SKIP_GENERATED_SUFFIXES:
+        if basename.endswith(suffix):
+            return "generated code"
+
+    return None
 
 
 def _build_indented_tree(file_paths: list[str]) -> str:
@@ -1628,6 +1719,7 @@ def format_summary_comment(
     model_name: str = "Claude",
     review_mode: str = "",
     partial: bool = False,
+    failed_files: list[str] | None = None,
 ) -> str:
     parts: list[str] = []
 
@@ -1666,11 +1758,18 @@ def format_summary_comment(
             f"posted ({breakdown})."
         )
     elif partial:
-        parts.append(
+        msg = (
             "\n---\n\u26a0\ufe0f Review incomplete — some batches failed. "
             "No issues found in the files that were reviewed, but not all files "
             "could be analyzed. Comment `@hawkeye review` to retry."
         )
+        if failed_files:
+            file_list = "\n".join(f"- `{f}`" for f in failed_files)
+            msg += (
+                f"\n\n<details><summary>Files not reviewed ({len(failed_files)})"
+                f"</summary>\n\n{file_list}\n\n</details>"
+            )
+        parts.append(msg)
     else:
         parts.append(
             "\n---\n\u2705 No issues found — looks good!"
@@ -2174,7 +2273,7 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
       borderline comment than to miss a real issue.
 """)
 
-REDUCE_MAX_DIFFS_CHARS = 150_000
+REDUCE_MAX_DIFFS_CHARS = 200_000
 
 
 def group_files_into_batches(files: list[dict]) -> list[list[dict]]:
@@ -2365,7 +2464,7 @@ def build_reduce_prompt(
     linter_config_section: str = "",
 ) -> str:
     """Build the reduce-phase prompt from batch results and all file diffs."""
-    max_results_chars = 80_000
+    max_results_chars = 120_000
     results_parts: list[str] = []
     results_chars = 0
     for i, result in enumerate(batch_results, 1):
@@ -2455,10 +2554,10 @@ def review_map_reduce(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None = None,
-) -> tuple[dict, list[dict], int]:
+) -> tuple[dict, list[dict], int, list[str]]:
     """Run a map-reduce review: parallel batch reviews followed by a consolidation pass.
 
-    Returns (summary, comments, failed_batches).
+    Returns (summary, comments, failed_batches, failed_files).
     """
     return _review_map_reduce_inner(
         pr_info, files, owner, repo, head_sha, github_token,
@@ -2478,7 +2577,7 @@ def _review_map_reduce_inner(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None,
-) -> tuple[dict, list[dict], int]:
+) -> tuple[dict, list[dict], int, list[str]]:
     shared_context = fetch_shared_context(
         owner, repo, head_sha, github_token, repo_tree, tree_paths,
     )
@@ -2488,7 +2587,7 @@ def _review_map_reduce_inner(
     total_batches = len(batches)
     if total_batches == 0:
         print("  Map-reduce: 0 batches (deletions-only PR) — nothing to review.", file=sys.stderr)
-        return {}, [], 0
+        return {}, [], 0, []
 
     print(f"  Map-reduce: {total_batches} batch(es).", file=sys.stderr)
 
@@ -2513,6 +2612,7 @@ def _review_map_reduce_inner(
 
     batch_results: list[dict] = []
     failed_batches = 0
+    failed_batch_indices: list[int] = []
 
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
@@ -2528,13 +2628,21 @@ def _review_map_reduce_inner(
                     results_by_idx[idx] = result
                 else:
                     failed_batches += 1
+                    failed_batch_indices.append(idx)
             except Exception as exc:
                 print(f"    Batch {idx + 1}/{total_batches} failed: {exc}", file=sys.stderr)
                 failed_batches += 1
+                failed_batch_indices.append(idx)
 
     for i in range(total_batches):
         if i in results_by_idx:
             batch_results.append(results_by_idx[i])
+
+    failed_files = [
+        f["filename"]
+        for idx in failed_batch_indices
+        for f in batches[idx]
+    ]
 
     if failed_batches:
         print(f"  Map phase: {failed_batches} batch(es) failed.", file=sys.stderr)
@@ -2578,13 +2686,13 @@ def _review_map_reduce_inner(
         combined_comments: list[dict] = []
         for r in batch_results:
             combined_comments.extend(r.get("comments", []))
-        return combined_summary, combined_comments, failed_batches
+        return combined_summary, combined_comments, failed_batches, failed_files
 
     summary = reduce_result.get("summary", {})
     comments = reduce_result.get("comments", [])
     print(f"  Reduce phase complete: {len(comments)} final comment(s).", file=sys.stderr)
 
-    return summary, comments, failed_batches
+    return summary, comments, failed_batches, failed_files
 
 
 # ---------------------------------------------------------------------------
@@ -2643,6 +2751,21 @@ def main() -> None:
         files = get_changed_files(owner, repo, pr_number, github_token)
         print(f"  {len(files)} changed file(s).", file=sys.stderr)
 
+        skipped_by_rule: list[str] = []
+        reviewable_files: list[dict] = []
+        for f in files:
+            reason = _should_skip_file(f["filename"])
+            if reason:
+                skipped_by_rule.append(f"{f['filename']} ({reason})")
+            else:
+                reviewable_files.append(f)
+        if skipped_by_rule:
+            print(
+                f"  Skipped {len(skipped_by_rule)} file(s): {'; '.join(skipped_by_rule)}",
+                file=sys.stderr,
+            )
+        files = reviewable_files
+
         valid_lines: dict[str, set[int]] = {}
         for f in files:
             valid_lines[f["filename"]] = get_diff_lines(f.get("patch", ""))
@@ -2669,6 +2792,7 @@ def main() -> None:
 
         review_mode = ""
         failed_b = 0
+        failed_files: list[str] = []
 
         if use_map_reduce:
             batches = group_files_into_batches(files)
@@ -2678,7 +2802,7 @@ def main() -> None:
                 f"{total_changes} changes, {num_batches} batches)...",
                 file=sys.stderr,
             )
-            summary, all_returned, failed_b = review_map_reduce(
+            summary, all_returned, failed_b, failed_files = review_map_reduce(
                 pr_info, files, owner, repo, head_sha, github_token,
                 api_url, api_token, repo_tree, tree_paths,
                 batches=batches,
@@ -2730,42 +2854,44 @@ def main() -> None:
         comments = filter_comments(raw_comments, valid_lines, existing)
         print(f"  {len(comments)} comment(s) survived filtering.", file=sys.stderr)
 
-        if not use_map_reduce:
-            total_additions = sum(f.get("additions", 0) for f in files)
-            if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:
+        total_additions = sum(f.get("additions", 0) for f in files)
+        if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:
+            print(
+                f"  Zero comments on {total_additions} additions — running second-pass review...",
+                file=sys.stderr,
+            )
+            retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
+            retry_linter_config = get_linter_config(owner, repo, head_sha, github_token, tree_paths)
+            retry_linter_section = (
+                "## Linter and formatter configuration\n\n"
+                "The following linter/formatter configs are active in this project. "
+                "All suggested code changes MUST comply with these rules.\n\n"
+                f"{retry_linter_config}"
+            ) if retry_linter_config else ""
+            retry_prompt = build_retry_prompt(pr_info, files, retry_related, retry_linter_section)
+            retry_text = call_claude(retry_prompt, api_url, api_token)
+            retry_response = parse_response(retry_text)
+            if retry_response:
+                retry_all = retry_response.get("comments", [])
+                retry_raw = [
+                    c
+                    for c in retry_all
+                    if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
+                ]
                 print(
-                    f"  Zero comments on {total_additions} additions — running second-pass review...",
+                    f"  Second pass returned {len(retry_all)} comment(s), "
+                    f"{len(retry_raw)} valid.",
                     file=sys.stderr,
                 )
-                retry_related = get_related_context(files, owner, repo, head_sha, github_token, tree_paths)
-                retry_linter_config = get_linter_config(owner, repo, head_sha, github_token, tree_paths)
-                retry_linter_section = (
-                    "## Linter and formatter configuration\n\n"
-                    "The following linter/formatter configs are active in this project. "
-                    "All suggested code changes MUST comply with these rules.\n\n"
-                    f"{retry_linter_config}"
-                ) if retry_linter_config else ""
-                retry_prompt = build_retry_prompt(pr_info, files, retry_related, retry_linter_section)
-                retry_text = call_claude(retry_prompt, api_url, api_token)
-                retry_response = parse_response(retry_text)
-                if retry_response:
-                    retry_all = retry_response.get("comments", [])
-                    retry_raw = [
-                        c
-                        for c in retry_all
-                        if isinstance(c, dict) and c.get("path") and isinstance(c.get("line"), int) and c.get("message")
-                    ]
-                    print(
-                        f"  Second pass returned {len(retry_all)} comment(s), "
-                        f"{len(retry_raw)} valid.",
-                        file=sys.stderr,
-                    )
-                    retry_comments = filter_comments(retry_raw, valid_lines, existing)
-                    print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
-                    comments.extend(retry_comments)
+                retry_comments = filter_comments(retry_raw, valid_lines, existing)
+                print(f"  {len(retry_comments)} second-pass comment(s) survived filtering.", file=sys.stderr)
+                comments.extend(retry_comments)
 
         is_partial = use_map_reduce and failed_b > 0
-        summary_body = format_summary_comment(summary, comments, model_name, review_mode, partial=is_partial)
+        summary_body = format_summary_comment(
+            summary, comments, model_name, review_mode,
+            partial=is_partial, failed_files=failed_files if is_partial else None,
+        )
         post_review(owner, repo, pr_number, head_sha, summary_body, comments, github_token, placeholder_id)
 
         if use_map_reduce and failed_b:

@@ -80,7 +80,7 @@ Each review produces three things:
 2. **Inline comments** — posted on relevant diff lines, with optional `suggestion` blocks for one-click fixes
 3. **Commit status** — `HawkEye Review` on the head commit: `success`, `pending`, or `error`
 
-Every comment includes the reviewer version (e.g. `v1.4.3`) and an AI-generated content disclaimer.
+Every comment includes the reviewer version (e.g. `v1.4.4`) and an AI-generated content disclaimer.
 
 ---
 

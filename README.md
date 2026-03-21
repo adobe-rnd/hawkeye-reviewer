@@ -268,6 +268,20 @@ Sending every file in full would waste tokens on unchanged code. For files over 
 
 If the expanded context already covers >70% of the file, the full source is sent instead. Estimated savings: **40–60% of file content tokens**.
 
+### Automatic file skipping
+
+Files that cannot be meaningfully reviewed are filtered out before any model calls, saving tokens and avoiding noise:
+
+| Category | Examples |
+|----------|----------|
+| **Lock files** | `package-lock.json`, `yarn.lock`, `Cargo.lock`, `go.sum`, `poetry.lock`, `composer.lock`, and more |
+| **Binary files** | Images, fonts, documents, archives, audio/video, compiled objects (40+ extensions) |
+| **Minified/bundled** | `*.min.js`, `*.bundle.css`, `*.chunk.mjs` |
+| **Source maps** | `*.js.map`, `*.css.map`, `*.mjs.map` |
+| **Generated code** | `*.pb.go`, `*.grpc.go`, `*.generated.ts`, `*_gen.go`, `.g.dart` |
+
+Skipped files are logged with their reason for transparency.
+
 ### Repository structure
 
 The full directory tree (a single Git Trees API call) lets Claude reason across the whole project layout:
@@ -351,7 +365,7 @@ Every review follows the same pipeline:
 
 **Reduce phase** — a consolidation pass deduplicates comments, validates suggestions, and surfaces cross-file issues (broken contracts, mismatched interfaces, missing test updates). If the reduce call fails, all batch comments are concatenated directly as a fallback.
 
-**Failure handling** — if some batches fail, the review is posted as partial with a warning in the summary and a `failure` status to block merges. Deletions-only PRs exit early with a "no reviewable files" status.
+**Failure handling** — if some batches fail, the review is posted as partial with a warning in the summary (listing the specific files in failed batches) and a `failure` status to block merges. Deletions-only PRs exit early with a "no reviewable files" status.
 
 ---
 
@@ -389,7 +403,7 @@ HawkEye uses four independent layers to keep the signal-to-noise ratio high.
 | PR size | Mode | API calls |
 |---------|------|-----------|
 | < 8 files and < 1,500 changes | Single-pass | 1 (+ 1 optional retry if 0 comments) |
-| ≥ 8 files or ≥ 1,500 changes | Map-reduce | N batches + 1 reduce |
+| ≥ 8 files or ≥ 1,500 changes | Map-reduce | N batches + 1 reduce (+ 1 optional retry if 0 comments) |
 
 Map batches run in parallel — wall time is `max(batch_time) + reduce_time`, not the sum.
 
@@ -401,8 +415,8 @@ The numbers below are the caps for the **changed files section** of each prompt.
 |-----------|-------------------|------------|
 | Single-pass | 180K chars (~50K tokens) | 16,384 tokens |
 | Map-reduce batch | 120K chars (~35K tokens) | 16,384 tokens |
-| Reduce (consolidation) | 150K chars diffs + 80K batch results | 16,384 tokens |
-| Second-pass retry | Diff-only (no context layers) | 16,384 tokens |
+| Reduce (consolidation) | 200K chars diffs + 120K batch results | 16,384 tokens |
+| Second-pass retry | Diff-only, capped at 200K chars (no context layers) | 16,384 tokens |
 
 ### Estimated costs
 

@@ -11,6 +11,7 @@ import re
 import sys
 import textwrap
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -626,6 +627,25 @@ def _infer_test_paths(filepath: str) -> list[str]:
         else:
             candidates.append(os.path.join("tests", f"test_{name}{ext}"))
     return candidates
+
+
+_TEST_MARKERS = (".test.", ".spec.", "__test__", "_test.")
+_TEST_DIR_MARKERS = ("__tests__", "tests", "test", "specs")
+
+
+def _is_test_file(path: str) -> bool:
+    """Return True if *path* looks like a test file based on naming conventions."""
+    base = os.path.basename(path).lower()
+    if any(m in base for m in _TEST_MARKERS):
+        return True
+    if base.startswith("test_") or base.startswith("test."):
+        return True
+    # Go convention: *_test.go
+    if base.endswith("_test.go"):
+        return True
+    # Check directory components
+    parts = path.lower().split("/")
+    return any(p in _TEST_DIR_MARKERS for p in parts[:-1])
 
 
 def _infer_build_config_paths(changed_files: list[dict]) -> list[str]:
@@ -2443,11 +2463,15 @@ def build_batch_prompt(
     token: str,
     shared_context: dict[str, str],
     tree_paths: set[str] | None,
+    shared_fetched_paths: set[str] | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Build a review prompt for a single batch of files.
 
     Returns (prompt_text, coverage) where coverage maps file path to
     review mode: "full", "diff-only", or "skipped".
+
+    *shared_fetched_paths* is a thread-safe set (guarded externally by a lock)
+    used to avoid re-fetching the same sibling/import files across batches.
     """
     all_files_lines = []
     for f in all_files:
@@ -2527,10 +2551,16 @@ def build_batch_prompt(
 
     files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
 
-    fetched_paths: set[str] = set()
+    fetched_paths: set[str] = shared_fetched_paths if shared_fetched_paths is not None else set()
+
+    # Skip sibling/import context for test-only batches — tests are best
+    # reviewed against the source they test (already in the PR or related context).
+    batch_all_tests = all(
+        _is_test_file(f["filename"]) for f in batch_files if f.get("status") != "removed"
+    )
 
     sibling_context = ""
-    if tree_paths:
+    if tree_paths and not batch_all_tests:
         sibling_context = get_sibling_files(
             batch_files, tree_paths, owner, repo, head_sha, token, fetched_paths,
         )
@@ -2542,7 +2572,7 @@ def build_batch_prompt(
     ) if sibling_context else ""
 
     import_context = ""
-    if tree_paths and file_contents:
+    if tree_paths and file_contents and not batch_all_tests:
         changed_paths = {f["filename"] for f in batch_files}
         import_context = get_imported_files(
             file_contents, tree_paths, changed_paths,
@@ -2681,6 +2711,103 @@ def build_reduce_prompt(
     )
 
 
+class _ProgressTracker:
+    """Tracks map-reduce progress and debounces GitHub comment updates."""
+
+    _DEBOUNCE_SECS = 30
+
+    def __init__(
+        self,
+        owner: str,
+        repo: str,
+        comment_id: int | None,
+        github_token: str,
+        total_files: int,
+        total_batches: int,
+    ) -> None:
+        self._owner = owner
+        self._repo = repo
+        self._comment_id = comment_id
+        self._github_token = github_token
+        self._total_files = total_files
+        self._total_batches = total_batches
+        self._completed_batches = 0
+        self._failed_batches = 0
+        self._files_reviewed = 0
+        self._phase = "map"
+        self._lock = threading.Lock()
+        self._last_update = 0.0
+
+    def _bar(self, done: int, total: int, width: int = 20) -> str:
+        filled = round(width * done / total) if total else 0
+        return "\u2588" * filled + "\u2591" * (width - filled)
+
+    def _build_body(self) -> str:
+        logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
+        pct = round(100 * self._completed_batches / self._total_batches) if self._total_batches else 0
+        bar = self._bar(self._completed_batches, self._total_batches)
+
+        if self._phase == "reduce":
+            phase_text = "Consolidating results across all batches..."
+        else:
+            phase_text = "Reviewing batches in parallel..."
+
+        failed_line = ""
+        if self._failed_batches:
+            failed_line = f"\n\u26a0\ufe0f **{self._failed_batches}** batch(es) failed"
+
+        return (
+            f"<h2>{logo} HawkEye Review in progress...</h2>\n\n"
+            f"| | |\n|---|---|\n"
+            f"| **Files** | {self._total_files} across {self._total_batches} batches |\n"
+            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n"
+            f"| **Files reviewed** | {self._files_reviewed}/{self._total_files} |"
+            f"{failed_line}\n\n"
+            f"_{phase_text}_"
+        )
+
+    def batch_done(self, num_files: int, failed: bool = False) -> None:
+        with self._lock:
+            self._completed_batches += 1
+            if failed:
+                self._failed_batches += 1
+            else:
+                self._files_reviewed += num_files
+        self._maybe_update()
+
+    def set_reduce_phase(self) -> None:
+        with self._lock:
+            self._phase = "reduce"
+        self._force_update()
+
+    def _maybe_update(self) -> None:
+        now = time.time()
+        with self._lock:
+            if now - self._last_update < self._DEBOUNCE_SECS:
+                return
+            self._last_update = now
+            body = self._build_body()
+        self._post(body)
+
+    def _force_update(self) -> None:
+        with self._lock:
+            self._last_update = time.time()
+            body = self._build_body()
+        self._post(body)
+
+    def post_initial(self) -> None:
+        """Post the first progress update immediately."""
+        self._force_update()
+
+    def _post(self, body: str) -> None:
+        if not self._comment_id:
+            return
+        try:
+            edit_comment(self._owner, self._repo, self._comment_id, body, self._github_token)
+        except Exception as exc:
+            print(f"  Progress update failed (non-fatal): {exc}", file=sys.stderr)
+
+
 def review_map_reduce(
     pr_info: dict,
     files: list[dict],
@@ -2693,6 +2820,7 @@ def review_map_reduce(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None = None,
+    placeholder_comment_id: int | None = None,
 ) -> tuple[dict, list[dict], int, list[str], dict[str, str]]:
     """Run a map-reduce review: parallel batch reviews followed by a consolidation pass.
 
@@ -2701,6 +2829,7 @@ def review_map_reduce(
     return _review_map_reduce_inner(
         pr_info, files, owner, repo, head_sha, github_token,
         api_url, api_token, repo_tree, tree_paths, batches,
+        placeholder_comment_id,
     )
 
 
@@ -2716,6 +2845,7 @@ def _review_map_reduce_inner(
     repo_tree: str,
     tree_paths: set[str] | None,
     batches: list[list[dict]] | None,
+    placeholder_comment_id: int | None = None,
 ) -> tuple[dict, list[dict], int, list[str], dict[str, str]]:
     shared_context = fetch_shared_context(
         owner, repo, head_sha, github_token, repo_tree, tree_paths,
@@ -2730,9 +2860,20 @@ def _review_map_reduce_inner(
 
     print(f"  Map-reduce: {total_batches} batch(es).", file=sys.stderr)
 
+    total_reviewable = sum(
+        len(b) for b in batches
+    )
+    progress = _ProgressTracker(
+        owner, repo, placeholder_comment_id, github_token,
+        total_files=total_reviewable, total_batches=total_batches,
+    )
+    progress.post_initial()
+
     # Thread-safe coverage collection across batches
     all_coverage: dict[str, str] = {}
     coverage_lock = threading.Lock()
+    # Shared across batches so siblings/imports fetched by one batch are not re-fetched
+    shared_fetched_paths: set[str] = set()
 
     def _run_batch(batch_idx: int, batch_files: list[dict]) -> dict:
         num = batch_idx + 1
@@ -2743,6 +2884,7 @@ def _review_map_reduce_inner(
             pr_info, batch_files, files, num, total_batches,
             owner, repo, head_sha, github_token,
             shared_context, tree_paths,
+            shared_fetched_paths=shared_fetched_paths,
         )
         with coverage_lock:
             all_coverage.update(batch_coverage)
@@ -2771,17 +2913,21 @@ def _review_map_reduce_inner(
         results_by_idx: dict[int, dict] = {}
         for future in as_completed(futures):
             idx = futures[future]
+            batch_file_count = len(batches[idx])
             try:
                 result = future.result()
                 if result:
                     results_by_idx[idx] = result
+                    progress.batch_done(batch_file_count)
                 else:
                     failed_batches += 1
                     failed_batch_indices.append(idx)
+                    progress.batch_done(batch_file_count, failed=True)
             except Exception as exc:
                 print(f"    Batch {idx + 1}/{total_batches} failed: {exc}", file=sys.stderr)
                 failed_batches += 1
                 failed_batch_indices.append(idx)
+                progress.batch_done(batch_file_count, failed=True)
 
     for i in range(total_batches):
         if i in results_by_idx:
@@ -2808,6 +2954,7 @@ def _review_map_reduce_inner(
         file=sys.stderr,
     )
 
+    progress.set_reduce_phase()
     print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)
     reduce_prompt = build_reduce_prompt(
         pr_info, files, batch_results, shared_context.get("guidelines_raw", ""),
@@ -2979,6 +3126,7 @@ def main() -> None:
                 pr_info, files, owner, repo, head_sha, github_token,
                 api_url, api_token, repo_tree, tree_paths,
                 batches=batches,
+                placeholder_comment_id=placeholder_id,
             )
             if failed_b:
                 review_mode = f"Map-reduce review ({num_batches} batches, {failed_b} failed)"

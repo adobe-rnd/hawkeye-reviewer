@@ -321,6 +321,21 @@ def generate_github_app_jwt(
     return f"{signing_input}.{sig}"
 
 
+class GitHubAPIError(RuntimeError):
+    """Raised when a GitHub API request to GitHub fails.
+
+    This may represent either:
+      * an HTTP error response (non-2xx status code), in which case ``status``
+        contains the HTTP status code, or
+      * a network/transport failure (e.g., DNS resolution error, TLS failure,
+        connection timeout), in which case ``status`` will be 0.
+    """
+
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        self.status = status
+
+
 def _github_request(
     method: str,
     url: str,
@@ -365,9 +380,9 @@ def _github_request(
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
-        raise RuntimeError(f"GitHub API {method} {url} → {e.code}: {body}") from e
+        raise GitHubAPIError(f"GitHub API {method} {url} → {e.code}: {body}", status=e.code) from e
     except urllib.error.URLError as e:
-        raise RuntimeError(f"GitHub API {method} {url} network error: {e}") from e
+        raise GitHubAPIError(f"GitHub API {method} {url} network error: {e}") from e
 
 
 def get_installation_token(
@@ -661,8 +676,8 @@ def read_repo_credentials_file(
     result: dict[str, str] = {}
     try:
         resp = _github_request("GET", url, token, ca_bundle=ca_bundle)
-    except RuntimeError as e:
-        if "→ 403:" not in str(e) and "→ 404:" not in str(e):
+    except GitHubAPIError as e:
+        if e.status not in (403, 404):
             raise  # Unexpected error — let caller log a warning
     else:
         try:
@@ -683,6 +698,11 @@ def read_repo_credentials_file(
 # ---------------------------------------------------------------------------
 # Review invocation
 # ---------------------------------------------------------------------------
+
+# Track in-flight reviews to prevent duplicate concurrent reviews on the same PR
+_inflight_reviews: set[str] = set()  # "env_name:owner/repo#pr_number"
+_inflight_lock = threading.Lock()
+
 
 def _resolve_api_credentials(
     env_cfg: dict,
@@ -753,6 +773,35 @@ def invoke_review(
 ) -> None:
     """Run hawkeye_pr_review.py as a subprocess for a single PR."""
     repo_ctx = f"{owner}/{repo}#{pr_number}"
+    review_key = f"{env_name}:{owner}/{repo}#{pr_number}"
+
+    with _inflight_lock:
+        if review_key in _inflight_reviews:
+            info("Review already in progress — skipping duplicate", env=env_name, repo=repo_ctx)
+            return
+        _inflight_reviews.add(review_key)
+
+    try:
+        _invoke_review_inner(
+            env_name, env_cfg, script_path, owner, repo,
+            pr_number, placeholder_id, installation_token,
+        )
+    finally:
+        with _inflight_lock:
+            _inflight_reviews.discard(review_key)
+
+
+def _invoke_review_inner(
+    env_name: str,
+    env_cfg: dict,
+    script_path: str,
+    owner: str,
+    repo: str,
+    pr_number: int,
+    placeholder_id: int,
+    installation_token: str,
+) -> None:
+    repo_ctx = f"{owner}/{repo}#{pr_number}"
     info("Starting review subprocess", env=env_name, repo=repo_ctx)
     api_url, api_token = _resolve_api_credentials(
         env_cfg, owner, repo, installation_token
@@ -820,7 +869,7 @@ def invoke_review(
         result = subprocess.run(
             [sys.executable, script_path, owner, repo, str(pr_number)],
             env=env,
-            timeout=600,
+            timeout=900,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -830,7 +879,7 @@ def invoke_review(
                 info(line, env=env_name, repo=repo_ctx)
         for line in (result.stderr or "").splitlines():
             if line.strip():
-                warn(line, env=env_name, repo=repo_ctx)
+                info(line, env=env_name, repo=repo_ctx)
         if result.returncode != 0:
             warn(f"Review subprocess exited {result.returncode}", env=env_name, repo=repo_ctx)
             _update_placeholder_error(f"The review script exited with code `{result.returncode}`.")
@@ -843,8 +892,8 @@ def invoke_review(
         for line in (exc.stderr or "").splitlines():
             if line.strip():
                 warn(line, env=env_name, repo=repo_ctx)
-        error("Review subprocess timed out after 600s", env=env_name, repo=repo_ctx)
-        _update_placeholder_error("The review timed out after 10 minutes.")
+        error("Review subprocess timed out after 900s", env=env_name, repo=repo_ctx)
+        _update_placeholder_error("The review timed out after 15 minutes.")
     except Exception as exc:
         stdout = getattr(exc, "stdout", None)
         stderr = getattr(exc, "stderr", None)
@@ -1142,8 +1191,6 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 def run_test_auth(cfg: dict) -> None:
     """Test GitHub App JWT auth for all configured environments."""
-    import sys
-
     all_ok = True
     for env_name, env_cfg in cfg["envs"].items():
         print(f"\n=== Testing auth for env: {env_name} ===")

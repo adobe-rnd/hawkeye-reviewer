@@ -427,8 +427,7 @@ LINTER_CONFIG_MAX_PER_FILE = 3000
 LINTER_CONFIG_MAX_TOTAL = 12_000
 
 GUIDELINES_PATHS = [
-    ".github/hawkeye-review.md",
-    ".hawkeye-review.md",
+    ".hawkeye/review.md",
 ]
 
 GUIDELINES_MAX_CHARS = 4000

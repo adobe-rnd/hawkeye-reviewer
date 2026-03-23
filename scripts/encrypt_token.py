@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""encrypt_token.py — encrypt a Claude API token for storage as a GitHub repo variable.
+"""encrypt_token.py — encrypt a Claude API token for storage as a GitHub repo variable
+or credentials file.
 
 Run this locally. Nothing secret is ever sent to the webhook server.
 
@@ -11,14 +12,22 @@ What it does:
   2. Generates a random AES-256 key + IV
   3. Encrypts the token with AES-256-CBC
   4. Encrypts the AES key+IV with RSA-4096-OAEP (using the server's public key)
-  5. Outputs the encrypted blob to set as HAWKEYE_CLAUDE_BLOB in your repo
+  5. Outputs the encrypted blob to store as HAWKEYE_CLAUDE_BLOB
 
 Zero pip dependencies — requires Python 3.8+ and openssl on PATH.
 
-GitHub repo variable setup (one-time per repo):
+Option A — GitHub Actions Variables (repos with Actions enabled):
   1. Go to your repo → Settings → Secrets and variables → Actions → Variables
   2. Create HAWKEYE_CLAUDE_API_URL  = your Bedrock endpoint URL
   3. Create HAWKEYE_CLAUDE_BLOB = the encrypted blob printed by this script
+
+Option B — credentials file (repos without GitHub Actions, e.g. GHES):
+  1. Create .hawkeye/credentials in your repo with these two lines:
+       HAWKEYE_CLAUDE_API_URL=<your Bedrock endpoint URL>
+       HAWKEYE_CLAUDE_BLOB=<the encrypted blob printed by this script>
+  2. Commit and push the file — it is safe to commit since the token is encrypted
+     with the server's RSA public key and cannot be decrypted without the server's
+     private key.
 """
 
 import argparse
@@ -143,11 +152,19 @@ def main() -> None:
     print("=" * 60)
     print()
     print("Next steps:")
-    print("  1. Go to your repo → Settings → Secrets and variables → Actions → Variables")
-    print("  2. Create variable: HAWKEYE_CLAUDE_API_URL  = <your Bedrock endpoint URL>")
-    print("  3. Create variable: HAWKEYE_CLAUDE_BLOB = <the blob above>")
     print()
-    print("That's it — the webhook server will pick up the variables automatically.")
+    print("  Option A — GitHub Actions Variables (repos with Actions enabled):")
+    print("    1. Go to your repo → Settings → Secrets and variables → Actions → Variables")
+    print("    2. Create variable: HAWKEYE_CLAUDE_API_URL  = <your Bedrock endpoint URL>")
+    print("    3. Create variable: HAWKEYE_CLAUDE_BLOB = <the blob above>")
+    print()
+    print("  Option B — credentials file (repos without GitHub Actions, e.g. GHES):")
+    print("    1. Create .hawkeye/credentials in your repo with:")
+    print("         HAWKEYE_CLAUDE_API_URL=<your Bedrock endpoint URL>")
+    print("         HAWKEYE_CLAUDE_BLOB=<the blob above>")
+    print("    2. Commit and push — safe to commit, token is encrypted.")
+    print()
+    print("The webhook server will pick up credentials automatically.")
 
 
 if __name__ == "__main__":

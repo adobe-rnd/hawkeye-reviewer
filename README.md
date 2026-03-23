@@ -33,7 +33,7 @@ AI-powered pull request reviews using Claude (Anthropic) via Amazon Bedrock. Pro
 | 📦 **Map-reduce pipeline** | Handles large PRs (8+ files or 1500+ changes) with parallel batches and cross-file consolidation |
 | 🧠 **Full repo awareness** | Directory tree, sibling files, and imported modules for pattern-aware feedback |
 | 🔧 **Linter-aware** | Fetches your linter/formatter configs (64+ patterns, 10+ languages) — suggestions never violate your rules |
-| 📋 **Custom guidelines** | Optional `.github/hawkeye-review.md` for repo-specific instructions |
+| 📋 **Custom guidelines** | Optional `.hawkeye/review.md` for repo-specific instructions |
 | ✏️ **Inline suggestions** | Native GitHub suggestion blocks for one-click fixes |
 | 🚦 **5 severity levels** | Critical, warning, suggestion, design, nitpick |
 | 🔕 **Deduplication** | Re-reviews skip comments already posted — no repeated feedback |
@@ -119,7 +119,7 @@ https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet
 
 That's it. Open a pull request and HawkEye will automatically post a review.
 
-> **Optional:** Create `.github/hawkeye-review.md` in your repo with project-specific instructions for the reviewer. See [Custom review guidelines](#custom-review-guidelines).
+> **Optional:** Create `.hawkeye/review.md` in your repo with project-specific instructions for the reviewer. See [Custom review guidelines](#custom-review-guidelines).
 
 ---
 
@@ -254,7 +254,7 @@ HawkEye assembles a layered context window so Claude understands your codebase �
 | Imported modules | 20K | Local modules referenced by `import`/`require()` in changed files |
 | Linter/formatter configs | 12K | Active rules from 64+ config file patterns |
 | Project documentation | 8K | `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `.cursorrules` |
-| Custom guidelines | 4K | `.github/hawkeye-review.md` — team-specific instructions |
+| Custom guidelines | 4K | `.hawkeye/review.md` — team-specific instructions |
 | Related context | 15K | Auto-inferred test files and build configs |
 | **Changed files (diff)** | **180K** | Full content + unified diff |
 
@@ -320,7 +320,7 @@ HawkEye fetches your linter/formatter configs so every suggestion block respects
 
 ### Custom review guidelines
 
-Create **`.github/hawkeye-review.md`** (or `.hawkeye-review.md` at the repo root) with free-form instructions:
+Create **`.hawkeye/review.md`** in your repo with free-form instructions:
 
 ```markdown
 - This project targets Python 3.11+
@@ -389,10 +389,10 @@ HawkEye uses four independent layers to keep the signal-to-noise ratio high.
 - False positives that look wrong given full cross-file context are removed
 
 #### 4. Custom guidelines — your escape hatch:
-- Add `.github/hawkeye-review.md` to suppress entire categories or add project-specific rules
+- Add `.hawkeye/review.md` to suppress entire categories or add project-specific rules
 - These instructions take precedence over all default behavior
 
-> **Philosophy:** HawkEye errs toward thoroughness over conservatism — it would rather surface a concern that turns out fine than miss a real bug. If comment volume is too high for your workflow, `.github/hawkeye-review.md` is the main dial.
+> **Philosophy:** HawkEye errs toward thoroughness over conservatism — it would rather surface a concern that turns out fine than miss a real bug. If comment volume is too high for your workflow, `.hawkeye/review.md` is the main dial.
 
 ---
 
@@ -445,7 +445,7 @@ Latency is dominated by Claude response time — typically **1–3 minutes** per
 ### Reducing cost
 
 - **Use a smaller model** — point `HAWKEYE_CLAUDE_API_URL` to Claude Haiku for a cheaper, faster review
-- **Scope with guidelines** — add `.github/hawkeye-review.md` to skip whole categories (e.g. "skip design suggestions")
+- **Scope with guidelines** — add `.hawkeye/review.md` to skip whole categories (e.g. "skip design suggestions")
 - **Smart file inclusion** already saves an estimated 40–60% of file content tokens by default
 
 ---

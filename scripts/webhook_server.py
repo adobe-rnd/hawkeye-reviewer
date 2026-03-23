@@ -519,7 +519,7 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
 # GitHub repo variables  (HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB)
 # ---------------------------------------------------------------------------
 
-_var_cache: dict[tuple[str, str, str], tuple[dict, float]] = {}
+_var_cache: dict[tuple, tuple[dict, float]] = {}
 _var_cache_lock = threading.Lock()
 _VAR_CACHE_TTL = 300  # 5 minutes
 
@@ -565,6 +565,47 @@ def read_repo_variables(
     return result
 
 
+def read_repo_credentials_file(
+    github_api_url: str,
+    token: str,
+    owner: str,
+    repo: str,
+    ca_bundle: str | None,
+) -> dict[str, str]:
+    """Read HAWKEYE_CLAUDE_API_URL and HAWKEYE_CLAUDE_BLOB from
+    .hawkeye/credentials in the repo via the Contents API.
+
+    The file format is KEY=VALUE lines, e.g.:
+        HAWKEYE_CLAUDE_API_URL=https://bedrock...
+        HAWKEYE_CLAUDE_BLOB=base64.base64
+
+    Returns {} if the file does not exist or cannot be read.
+    This is the fallback credential mechanism for repos without GitHub Actions Variables.
+    """
+    key = (github_api_url, owner.lower(), repo.lower(), "credfile")
+    with _var_cache_lock:
+        cached = _var_cache.get(key)
+        if cached and time.time() < cached[1]:
+            return cached[0]
+
+    url = f"{github_api_url}/repos/{owner}/{repo}/contents/.hawkeye/credentials"
+    try:
+        resp = _github_request("GET", url, token, ca_bundle=ca_bundle)
+        content = base64.b64decode(resp.get("content", "")).decode()
+        result: dict[str, str] = {}
+        for line in content.splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                result[k.strip()] = v.strip()
+    except Exception:
+        result = {}  # File not found, no permission, or invalid content — skip
+
+    with _var_cache_lock:
+        _var_cache[key] = (result, time.time() + _VAR_CACHE_TTL)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Review invocation
 # ---------------------------------------------------------------------------
@@ -580,10 +621,15 @@ def _resolve_api_credentials(
     Lookup order (most specific wins):
       1. GitHub repo Actions variables  HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB
          (set by the repo team; token value must be encrypted with encrypt_token.py)
-      2. Server default from env_cfg (CLAUDE_API_URL / CLAUDE_API_TOKEN)
+      2. .hawkeye/credentials file in the repo (same KEY=VALUE format;
+         for repos without GitHub Actions Variables, e.g. GHES without Actions)
+      3. Server default from env_cfg (CLAUDE_API_URL / CLAUDE_API_TOKEN)
+
+    NOTE: Steps 1 and 2 require SERVER_PRIVATE_KEY to be set on the server,
+    as both use encrypted tokens that must be decrypted with the server's private key.
     """
-    # 1. Per-repo GitHub variables
     if os.environ.get("SERVER_PRIVATE_KEY"):
+        # 1. Per-repo GitHub Actions variables
         try:
             repo_vars = read_repo_variables(
                 env_cfg["github_api_url"],
@@ -600,7 +646,24 @@ def _resolve_api_credentials(
         except Exception as exc:
             warn(f"Could not read/decrypt repo variables for {owner}/{repo}: {exc}")
 
-    # 2. Server default
+        # 2. .hawkeye/credentials file
+        try:
+            cred_file = read_repo_credentials_file(
+                env_cfg["github_api_url"],
+                installation_token,
+                owner,
+                repo,
+                env_cfg.get("ssl_ca_bundle"),
+            )
+            file_url = cred_file.get("HAWKEYE_CLAUDE_API_URL", "").strip()
+            file_token_enc = cred_file.get("HAWKEYE_CLAUDE_BLOB", "").strip()
+            if file_url and file_token_enc:
+                file_token = decrypt_repo_token(file_token_enc)
+                return file_url, file_token
+        except Exception as exc:
+            warn(f"Could not read/decrypt credentials file for {owner}/{repo}: {exc}")
+
+    # 3. Server default
     return env_cfg.get("api_url", ""), env_cfg.get("api_token", "")
 
 

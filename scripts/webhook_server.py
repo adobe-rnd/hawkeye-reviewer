@@ -125,6 +125,20 @@ def _load_single_env_config() -> dict[str, Any]:
     }
 
 
+def _expand_env_vars(obj: Any) -> Any:
+    """Recursively expand ${VAR_NAME} placeholders in config string values."""
+    if isinstance(obj, dict):
+        return {k: _expand_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env_vars(v) for v in obj]
+    if isinstance(obj, str):
+        import re
+        def replacer(m: re.Match) -> str:
+            return os.environ.get(m.group(1), "")
+        return re.sub(r"\$\{([^}]+)\}", replacer, obj)
+    return obj
+
+
 def load_config() -> dict[str, Any]:
     """
     Load server configuration.
@@ -134,8 +148,15 @@ def load_config() -> dict[str, Any]:
 
     'envs' is a dict mapping env_name -> env_config.
     'single_env' is True when no CONFIG_FILE is set (all webhooks go to /webhook).
+
+    String values in the config file may use ${ENV_VAR_NAME} placeholders —
+    these are expanded from environment variables at load time, so the config
+    file can be committed to the repo without any secrets.
     """
-    config_file = os.environ.get("CONFIG_FILE")
+    default_config = os.path.join(os.path.dirname(__file__), "..", "config.json")
+    config_file = os.environ.get("CONFIG_FILE") or (
+        default_config if os.path.exists(default_config) else None
+    )
     port = int(os.environ.get("PORT", DEFAULT_PORT))
     host = os.environ.get("HOST", DEFAULT_HOST)
     script_path = os.environ.get("SCRIPT_PATH", DEFAULT_SCRIPT_PATH)
@@ -143,7 +164,7 @@ def load_config() -> dict[str, Any]:
 
     if config_file:
         with open(config_file) as f:
-            raw = json.load(f)
+            raw = _expand_env_vars(json.load(f))
         envs = raw.get("envs", {})
         if not envs:
             raise ValueError("CONFIG_FILE must have a non-empty 'envs' object")
@@ -184,24 +205,30 @@ def _b64url(data: bytes | dict) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-def generate_github_app_jwt(app_id: str, pem_path: str | None) -> str:
+def generate_github_app_jwt(
+    app_id: str,
+    pem_path: str | None,
+    pem_content: str | None = None,
+) -> str:
     """Generate a GitHub App JWT using RS256 via openssl subprocess.
 
-    The private key is read from pem_path if provided, otherwise from the
-    GITHUB_APP_PRIVATE_KEY environment variable (PEM contents as a string).
+    The private key is resolved in this order:
+    1. pem_content — inline PEM string (from config file or caller)
+    2. pem_path — path to a .pem file on disk
+    3. GITHUB_APP_PRIVATE_KEY env var — PEM contents as a string (single-env fallback)
     """
     now = int(time.time())
     header = _b64url({"alg": "RS256", "typ": "JWT"})
     payload = _b64url({"iss": app_id, "iat": now - 60, "exp": now + 540})
     signing_input = f"{header}.{payload}"
 
-    pem_contents = os.environ.get("GITHUB_APP_PRIVATE_KEY")
-    if pem_contents:
-        # Key provided as env var — write to a temp file for openssl
+    inline = (pem_content or os.environ.get("GITHUB_APP_PRIVATE_KEY") or "").replace("\\n", "\n")
+    if inline:
+        # Key provided inline — write to a temp file for openssl
         fd, tmp_path = tempfile.mkstemp(suffix=".pem")
         try:
             with os.fdopen(fd, "w") as f:
-                f.write(pem_contents.replace("\\n", "\n"))
+                f.write(inline)
         except Exception:
             os.unlink(tmp_path)
             raise
@@ -221,8 +248,8 @@ def generate_github_app_jwt(app_id: str, pem_path: str | None) -> str:
         )
     else:
         raise RuntimeError(
-            "No private key provided. Set GITHUB_APP_PRIVATE_KEY env var "
-            "or github_app_private_key_path in config."
+            "No private key provided. Set GITHUB_APP_PRIVATE_KEY env var, "
+            "github_app_private_key_path, or github_app_private_key in config."
         )
 
     if result.returncode != 0:
@@ -317,7 +344,8 @@ def get_cached_installation_token(
 
     jwt = generate_github_app_jwt(
         env_cfg["github_app_id"],
-        env_cfg["github_app_private_key_path"],
+        env_cfg.get("github_app_private_key_path"),
+        env_cfg.get("github_app_private_key"),
     )
     token, expires_at = get_installation_token(
         jwt,
@@ -966,12 +994,16 @@ def run_test_auth(cfg: dict) -> None:
         print(f"\n=== Testing auth for env: {env_name} ===")
         print(f"  GitHub API URL : {env_cfg['github_api_url']}")
         print(f"  App ID         : {env_cfg['github_app_id']}")
-        pem_display = env_cfg["github_app_private_key_path"] or "(using GITHUB_APP_PRIVATE_KEY env var)"
-        print(f"  PEM path       : {pem_display}")
+        if env_cfg.get("github_app_private_key"):
+            pem_display = "(inline PEM from config)"
+        else:
+            pem_display = env_cfg.get("github_app_private_key_path") or "(using GITHUB_APP_PRIVATE_KEY env var)"
+        print(f"  PEM            : {pem_display}")
         try:
             jwt = generate_github_app_jwt(
                 env_cfg["github_app_id"],
-                env_cfg["github_app_private_key_path"],
+                env_cfg.get("github_app_private_key_path"),
+                env_cfg.get("github_app_private_key"),
             )
             print("  JWT generation : OK")
             # Try to list installations

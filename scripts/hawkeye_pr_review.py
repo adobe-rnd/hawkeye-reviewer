@@ -2813,12 +2813,13 @@ class _ProgressTracker:
 
         return (
             f"<h2>{logo} HawkEye Review in progress...</h2>\n\n"
-            f"Using **map-reduce** strategy — PR is too large for a single pass.\n\n"
-            f"| | |\n|---|---|\n"
-            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n"
-            f"| **Batches** | {batch_detail} |\n"
-            f"| **Files reviewed** | {files_detail} |\n\n"
-            f"_{phase_text}_\n\n"
+            f"Using <b>map-reduce</b> strategy — PR is too large for a single pass.\n\n"
+            f"<table>\n"
+            f"<tr><td><b>Progress</b></td><td><code>{bar}</code> {self._completed_batches}/{self._total_batches} batches ({pct}%)</td></tr>\n"
+            f"<tr><td><b>Batches</b></td><td>{batch_detail}</td></tr>\n"
+            f"<tr><td><b>Files reviewed</b></td><td>{files_detail}</td></tr>\n"
+            f"</table>\n\n"
+            f"<i>{phase_text}</i>\n\n"
             f"<sub>This progress bar updates every ~{self._DEBOUNCE_SECS}s.</sub>"
         )
 

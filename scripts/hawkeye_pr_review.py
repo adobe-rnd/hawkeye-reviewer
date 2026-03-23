@@ -731,8 +731,9 @@ def get_related_context(
             break
         blocks.append(block)
         total_chars += len(block)
-        print(f"  related context: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
 
+    if blocks:
+        print(f"  related context: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -1058,8 +1059,9 @@ def get_sibling_files(
         total_files += 1
         if fetched_paths is not None:
             fetched_paths.add(path)
-        print(f"  sibling: included {path} ({len(content)} chars)", file=sys.stderr)
 
+    if blocks:
+        print(f"  sibling: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -1181,8 +1183,9 @@ def get_imported_files(
         total_files += 1
         if fetched_paths is not None:
             fetched_paths.add(path)
-        print(f"  import: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
 
+    if blocks:
+        print(f"  import: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -2346,8 +2349,15 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
     3. **Enhance** — add NEW comments for cross-file issues that individual
        reviewers could not detect: broken contracts between files, inconsistent
        interfaces, missing test updates for changed behavior, API schema
-       mismatches, build config incompatibilities.
+       mismatches, build config incompatibilities. These new comments may be
+       any severity including critical or warning.
     4. **Unify** — produce a single, cohesive summary of the entire PR.
+
+    NOTE: Critical and warning comments from the batch reviews have already been
+    extracted and will be included in the final review automatically. The batch
+    comments below contain only suggestion/design/nitpick severity. Focus your
+    consolidation on these lower-severity comments, but DO add new critical or
+    warning comments if you discover cross-file issues.
 
     ## Pull Request
     **Title:** {title}
@@ -2795,7 +2805,7 @@ class _ProgressTracker:
             phase_text = (
                 "\u2705 <b>Map phase complete</b> — all batches reviewed.\n\n"
                 "\u23f3 <b>Reduce phase running</b> — consolidating results across all batches. "
-                "This may take a few minutes, please wait..."
+                "Please wait..."
             )
         else:
             phase_text = "Reviewing batches in parallel..."
@@ -3026,10 +3036,44 @@ def _review_map_reduce_inner(
         file=sys.stderr,
     )
 
+    # Split batch comments: high-severity pass through directly,
+    # low-severity go to reduce for consolidation.
+    _PASSTHROUGH_SEVERITIES = {"critical", "warning"}
+    passthrough_comments: list[dict] = []
+    reduce_batch_results: list[dict] = []
+
+    for r in batch_results:
+        all_comments = r.get("comments", [])
+        high = [c for c in all_comments if isinstance(c, dict) and c.get("severity") in _PASSTHROUGH_SEVERITIES]
+        low = [c for c in all_comments if isinstance(c, dict) and c.get("severity") not in _PASSTHROUGH_SEVERITIES]
+        passthrough_comments.extend(high)
+        # Build a reduced batch result with only low-severity comments for the reduce prompt
+        reduce_batch_results.append({
+            "summary": r.get("summary", {}),
+            "comments": low,
+        })
+
+    # Dedup passthrough comments (same path+line = duplicate)
+    seen_keys: set[tuple[str, int]] = set()
+    deduped_passthrough: list[dict] = []
+    for c in passthrough_comments:
+        key = (c.get("path", ""), c.get("line", 0))
+        if key not in seen_keys:
+            seen_keys.add(key)
+            deduped_passthrough.append(c)
+
+    total_low = sum(len(r.get("comments", [])) for r in reduce_batch_results)
+    print(
+        f"  Passthrough: {len(deduped_passthrough)} critical/warning comment(s) "
+        f"({len(passthrough_comments) - len(deduped_passthrough)} duplicates removed).",
+        file=sys.stderr,
+    )
+    print(f"  Sending {total_low} suggestion/design/nitpick comment(s) to reduce phase.", file=sys.stderr)
+
     progress.set_reduce_phase()
     print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)
     reduce_prompt = build_reduce_prompt(
-        pr_info, files, batch_results, shared_context.get("guidelines_raw", ""),
+        pr_info, files, reduce_batch_results, shared_context.get("guidelines_raw", ""),
         linter_config_section=shared_context.get("linter_config_section", ""),
     )
     reduce_result: dict = {}
@@ -3067,10 +3111,17 @@ def _review_map_reduce_inner(
         return combined_summary, combined_comments, failed_batches, failed_files, all_coverage
 
     summary = reduce_result.get("summary", {})
-    comments = reduce_result.get("comments", [])
-    print(f"  Reduce phase complete: {len(comments)} final comment(s).", file=sys.stderr)
+    reduce_comments = reduce_result.get("comments", [])
 
-    return summary, comments, failed_batches, failed_files, all_coverage
+    # Merge: passthrough critical/warning + reduce-consolidated low-severity
+    all_comments = deduped_passthrough + reduce_comments
+    print(
+        f"  Reduce phase complete: {len(reduce_comments)} consolidated comment(s) "
+        f"+ {len(deduped_passthrough)} passthrough = {len(all_comments)} total.",
+        file=sys.stderr,
+    )
+
+    return summary, all_comments, failed_batches, failed_files, all_coverage
 
 
 # ---------------------------------------------------------------------------

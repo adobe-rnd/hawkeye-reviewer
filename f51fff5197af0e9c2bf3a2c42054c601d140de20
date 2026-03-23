@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "f51fff5197af0e9c2bf3a2c42054c601d140de20",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-24T01:03:39+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 9,
+    "total_deletions": 9,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 9,
+    "human_deletions": 9
+  },
+  "files": {
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 0,
+      "human_additions": 9,
+      "ai_deletions": 0,
+      "human_deletions": 9
+    }
+  }
+}

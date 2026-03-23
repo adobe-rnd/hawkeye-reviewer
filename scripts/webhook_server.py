@@ -338,6 +338,18 @@ def _github_request(
     data = json.dumps(payload).encode() if payload else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
+    # Log CA bundle status for GHES (non-github.com) — helps debug SSL failures
+    is_ghes = "api.github.com" not in url
+    if is_ghes:
+        if ca_bundle:
+            kind = "inline" if "-----BEGIN" in ca_bundle else "path"
+            detail = f"{len(ca_bundle)} chars" if kind == "inline" else ca_bundle
+            logger.info(f"Using custom CA bundle for GHES ({kind}: {detail})")
+        else:
+            logger.warning(
+                "No custom CA bundle for GHES — SSL may fail. Set GHES_SSL_CA_BUNDLE."
+            )
+
     ctx = None
     if ca_bundle:
         ctx = ssl.create_default_context()

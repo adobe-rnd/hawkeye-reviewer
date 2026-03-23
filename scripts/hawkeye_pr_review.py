@@ -1796,7 +1796,8 @@ def parse_response(text: str) -> dict[str, Any]:
         result = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         print(f"JSON parse error: {exc}", file=sys.stderr)
-        print(f"Raw text (first 500 chars): {text.strip()[:500]}", file=sys.stderr)
+        print(f"Cleaned JSON (first 500 chars): {cleaned[:500]}", file=sys.stderr)
+        print(f"Original text (first 500 chars): {text.strip()[:500]}", file=sys.stderr)
         return {}
     if not isinstance(result, dict):
         print(f"Expected JSON object, got {type(result).__name__}", file=sys.stderr)
@@ -2813,7 +2814,8 @@ class _ProgressTracker:
         return (
             f"<h2>{logo} HawkEye Review in progress...</h2>\n\n"
             f"Using **map-reduce** strategy — PR is too large for a single pass.\n\n"
-            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n|---|---|\n"
+            f"| | |\n|---|---|\n"
+            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n"
             f"| **Batches** | {batch_detail} |\n"
             f"| **Files reviewed** | {files_detail} |\n\n"
             f"_{phase_text}_\n\n"

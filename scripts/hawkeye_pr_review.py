@@ -1762,17 +1762,41 @@ def call_claude(prompt: str, api_url: str, api_token: str, *, timeout: int = 180
     return json.dumps(data)
 
 
+def _extract_json_block(text: str) -> str:
+    """Extract the JSON object from Claude's response, handling prose and fences.
+
+    Handles these common patterns:
+      1. Clean JSON: ``{ ... }``
+      2. Fenced JSON: ``\\`\\`\\`json\\n{ ... }\\n\\`\\`\\````
+      3. Prose + fenced JSON: ``## Review\\n\\`\\`\\`json\\n{ ... }\\n\\`\\`\\````
+      4. Trailing commas: ``{ "a": 1, }``
+    """
+    # Try to find a fenced JSON block first (handles prose before the fence)
+    fence_match = re.search(r"```(?:json)?\s*\n(\{.*?)\n```", text, re.DOTALL)
+    if fence_match:
+        block = fence_match.group(1).strip()
+    else:
+        # No fence — find the first { and last }
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            block = text[start:end + 1]
+        else:
+            block = text.strip()
+
+    # Fix trailing commas before } or ] (common Claude JSON error)
+    block = re.sub(r",\s*([}\]])", r"\1", block)
+    return block
+
+
 def parse_response(text: str) -> dict[str, Any]:
-    """Parse Claude's JSON, stripping any accidental markdown fences."""
-    cleaned = text.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", cleaned)
-    cleaned = re.sub(r"\n?```\s*$", "", cleaned)
-    cleaned = cleaned.strip()
+    """Parse Claude's JSON response, tolerating prose wrappers and minor JSON errors."""
+    cleaned = _extract_json_block(text)
     try:
         result = json.loads(cleaned)
     except json.JSONDecodeError as exc:
         print(f"JSON parse error: {exc}", file=sys.stderr)
-        print(f"Raw text (first 500 chars): {cleaned[:500]}", file=sys.stderr)
+        print(f"Raw text (first 500 chars): {text.strip()[:500]}", file=sys.stderr)
         return {}
     if not isinstance(result, dict):
         print(f"Expected JSON object, got {type(result).__name__}", file=sys.stderr)
@@ -2750,7 +2774,9 @@ class _ProgressTracker:
         self._total_batches = total_batches
         self._completed_batches = 0
         self._failed_batches = 0
+        self._failure_reasons: dict[str, int] = {}
         self._files_reviewed = 0
+        self._files_failed = 0
         self._phase = "map"
         self._lock = threading.Lock()
         self._last_update = 0.0
@@ -2769,25 +2795,39 @@ class _ProgressTracker:
         else:
             phase_text = "Reviewing batches in parallel..."
 
-        failed_line = ""
+        successful = self._completed_batches - self._failed_batches
+        batch_detail = f"\u2705 {successful} succeeded"
         if self._failed_batches:
-            failed_line = f"\n\u26a0\ufe0f **{self._failed_batches}** batch(es) failed"
+            reasons = ", ".join(
+                f"{r} ({n})" if n > 1 else r
+                for r, n in self._failure_reasons.items()
+            )
+            reason_text = f": {reasons}" if reasons else ""
+            batch_detail += f" \u26a0\ufe0f {self._failed_batches} failed{reason_text}"
+
+        files_skipped = self._files_failed
+        files_detail = f"{self._files_reviewed}/{self._total_files}"
+        if files_skipped:
+            files_detail += f" ({files_skipped} skipped from failed batches)"
 
         return (
             f"<h2>{logo} HawkEye Review in progress...</h2>\n\n"
-            f"| | |\n|---|---|\n"
-            f"| **Files** | {self._total_files} across {self._total_batches} batches |\n"
-            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n"
-            f"| **Files reviewed** | {self._files_reviewed}/{self._total_files} |"
-            f"{failed_line}\n\n"
-            f"_{phase_text}_"
+            f"Using **map-reduce** strategy — PR is too large for a single pass.\n\n"
+            f"| **Progress** | `{bar}` {self._completed_batches}/{self._total_batches} batches ({pct}%) |\n|---|---|\n"
+            f"| **Batches** | {batch_detail} |\n"
+            f"| **Files reviewed** | {files_detail} |\n\n"
+            f"_{phase_text}_\n\n"
+            f"<sub>This progress bar updates every ~{self._DEBOUNCE_SECS}s.</sub>"
         )
 
-    def batch_done(self, num_files: int, failed: bool = False) -> None:
+    def batch_done(self, num_files: int, failed: bool = False, reason: str = "") -> None:
         with self._lock:
             self._completed_batches += 1
             if failed:
                 self._failed_batches += 1
+                self._files_failed += num_files
+                if reason:
+                    self._failure_reasons[reason] = self._failure_reasons.get(reason, 0) + 1
             else:
                 self._files_reviewed += num_files
         self._maybe_update()
@@ -2939,12 +2979,20 @@ def _review_map_reduce_inner(
                 else:
                     failed_batches += 1
                     failed_batch_indices.append(idx)
-                    progress.batch_done(batch_file_count, failed=True)
+                    progress.batch_done(batch_file_count, failed=True, reason="JSON parse error")
+            except ClaudeAPIError as exc:
+                print(f"    Batch {idx + 1}/{total_batches} failed: {exc}", file=sys.stderr)
+                failed_batches += 1
+                failed_batch_indices.append(idx)
+                # Extract short reason from error message (e.g. "HTTP 400", "HTTP 429")
+                msg = str(exc)
+                short = msg.split("—")[0].strip() if "—" in msg else msg[:60]
+                progress.batch_done(batch_file_count, failed=True, reason=short)
             except Exception as exc:
                 print(f"    Batch {idx + 1}/{total_batches} failed: {exc}", file=sys.stderr)
                 failed_batches += 1
                 failed_batch_indices.append(idx)
-                progress.batch_done(batch_file_count, failed=True)
+                progress.batch_done(batch_file_count, failed=True, reason=type(exc).__name__)
 
     for i in range(total_batches):
         if i in results_by_idx:

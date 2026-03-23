@@ -1670,19 +1670,28 @@ class ClaudeAPIError(RuntimeError):
     """Raised when the Claude API returns an error response."""
 
 
-def _claude_error_message(status: int, _body: Any) -> str:
+def _claude_error_message(status: int, body: Any) -> str:
     """Return a user-friendly error message for a Claude API HTTP error."""
+    # Include the actual error body for debugging
+    detail = ""
+    if body:
+        try:
+            detail = f" Response: {json.dumps(body)[:500]}"
+        except (TypeError, ValueError):
+            detail = f" Response: {str(body)[:500]}"
+
     if status in (401, 403):
         return (
             f"Claude API authentication failed (HTTP {status}) — "
             "check your Claude credentials (`CLAUDE_API_URL` / `CLAUDE_API_TOKEN`, "
             "or `HAWKEYE_CLAUDE_API_URL` / `HAWKEYE_CLAUDE_BLOB` when set via the webhook server)."
+            f"{detail}"
         )
     if status == 429:
-        return "Claude API rate limit exceeded — please wait a moment and retry."
+        return f"Claude API rate limit exceeded — please wait a moment and retry.{detail}"
     if status >= 500:
-        return f"Claude service error (HTTP {status}) — this is likely transient, please retry."
-    return f"Claude API error (HTTP {status}) — check your endpoint configuration."
+        return f"Claude service error (HTTP {status}) — this is likely transient, please retry.{detail}"
+    return f"Claude API error (HTTP {status}) — check your endpoint configuration.{detail}"
 
 
 def call_claude(prompt: str, api_url: str, api_token: str, *, timeout: int = 180, max_tokens: int = 16384) -> str:
@@ -1693,7 +1702,6 @@ def call_claude(prompt: str, api_url: str, api_token: str, *, timeout: int = 180
     payload = {
         "messages": [
             {"role": "user", "content": [{"text": prompt}]},
-            {"role": "assistant", "content": [{"text": "{"}]},
         ],
         "inferenceConfig": {"maxTokens": max_tokens},
     }
@@ -1710,17 +1718,7 @@ def call_claude(prompt: str, api_url: str, api_token: str, *, timeout: int = 180
         contents = (data.get("output") or {}).get("message", {}).get("content", [])
         for c in contents:
             if isinstance(c, dict) and c.get("text"):
-                text = c["text"]
-                # Strip markdown fences first (in case prefill was ignored
-                # and the model wrapped its response in ```json ... ```)
-                stripped = text.strip()
-                stripped = re.sub(r"^```(?:json)?\s*\n?", "", stripped)
-                stripped = re.sub(r"\n?```\s*$", "", stripped)
-                stripped = stripped.strip()
-                # Prepend the prefilled opening brace
-                if not stripped.startswith("{"):
-                    stripped = "{" + stripped
-                return stripped
+                return c["text"]
         print("  WARNING: Claude response contained no text content blocks.", file=sys.stderr)
     except Exception as exc:
         print(f"  WARNING: unexpected Claude response structure: {exc}", file=sys.stderr)
@@ -2748,11 +2746,11 @@ def _review_map_reduce_inner(
         )
         with coverage_lock:
             all_coverage.update(batch_coverage)
-        text = call_claude(prompt, api_url, api_token, max_tokens=32768)
+        text = call_claude(prompt, api_url, api_token)
         result = parse_response(text)
         if not result:
             print(f"    Batch {num}/{total_batches}: retrying after parse failure...", file=sys.stderr)
-            text = call_claude(prompt, api_url, api_token, max_tokens=32768)
+            text = call_claude(prompt, api_url, api_token)
             result = parse_response(text)
         if result:
             n_comments = len(result.get("comments", []))

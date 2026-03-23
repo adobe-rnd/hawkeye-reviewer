@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -126,15 +127,23 @@ def _load_single_env_config() -> dict[str, Any]:
 
 
 def _expand_env_vars(obj: Any) -> Any:
-    """Recursively expand ${VAR_NAME} placeholders in config string values."""
+    """Recursively expand ${VAR_NAME} placeholders in config string values.
+
+    Raises ValueError if a referenced environment variable is not set.
+    """
     if isinstance(obj, dict):
         return {k: _expand_env_vars(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_expand_env_vars(v) for v in obj]
     if isinstance(obj, str):
-        import re
         def replacer(m: re.Match) -> str:
-            return os.environ.get(m.group(1), "")
+            var_name = m.group(1)
+            value = os.environ.get(var_name)
+            if value is None:
+                raise ValueError(
+                    f"Environment variable '{var_name}' referenced in config is not set"
+                )
+            return value
         return re.sub(r"\$\{([^}]+)\}", replacer, obj)
     return obj
 
@@ -147,7 +156,9 @@ def load_config() -> dict[str, Any]:
       port, host, script_path, max_concurrent_reviews, envs, single_env
 
     'envs' is a dict mapping env_name -> env_config.
-    'single_env' is True when no CONFIG_FILE is set (all webhooks go to /webhook).
+    'single_env' is True when no config file is found (all webhooks go to /webhook).
+    When config.json exists in the repo root or CONFIG_FILE is set, multi-env mode
+    is used and webhooks are routed to /webhook/{env_name}.
 
     String values in the config file may use ${ENV_VAR_NAME} placeholders —
     these are expanded from environment variables at load time, so the config
@@ -222,7 +233,10 @@ def generate_github_app_jwt(
     payload = _b64url({"iss": app_id, "iat": now - 60, "exp": now + 540})
     signing_input = f"{header}.{payload}"
 
-    inline = (pem_content or os.environ.get("GITHUB_APP_PRIVATE_KEY") or "").replace("\\n", "\n")
+    inline = (pem_content or "").replace("\\n", "\n")
+    if not inline and not pem_path:
+        # Fall back to env var only when neither config source is provided (single-env mode)
+        inline = (os.environ.get("GITHUB_APP_PRIVATE_KEY") or "").replace("\\n", "\n")
     if inline:
         # Key provided inline — write to a temp file for openssl
         fd, tmp_path = tempfile.mkstemp(suffix=".pem")

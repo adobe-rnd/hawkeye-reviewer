@@ -18,6 +18,7 @@ Usage:
   python3 scripts/webhook_server.py --test-auth
 """
 
+import atexit
 import base64
 import hashlib
 import hmac
@@ -127,9 +128,11 @@ def _load_single_env_config() -> dict[str, Any]:
 
 
 def _expand_env_vars(obj: Any) -> Any:
-    """Recursively expand ${VAR_NAME} placeholders in config string values.
+    """Recursively expand ${VAR_NAME} and ${VAR:-default} placeholders.
 
-    Raises ValueError if a referenced environment variable is not set.
+    ${VAR} — required; raises ValueError if unset.
+    ${VAR:-} — optional; uses "" when unset.
+    ${VAR:-default} — uses default (literal string) when unset.
     """
     if isinstance(obj, dict):
         return {k: _expand_env_vars(v) for k, v in obj.items()}
@@ -138,12 +141,13 @@ def _expand_env_vars(obj: Any) -> Any:
     if isinstance(obj, str):
         def replacer(m: re.Match) -> str:
             spec = m.group(1)
-            optional = spec.endswith(":-")
-            var_name = spec[:-2] if optional else spec
+            if ":-" in spec:
+                var_name, default = spec.split(":-", 1)
+                value = os.environ.get(var_name)
+                return value if value is not None else default
+            var_name = spec
             value = os.environ.get(var_name)
             if value is None:
-                if optional:
-                    return ""
                 raise ValueError(
                     f"Environment variable '{var_name}' referenced in config is not set"
                 )
@@ -183,9 +187,12 @@ def load_config() -> dict[str, Any]:
         envs = raw.get("envs", {})
         if not envs:
             raise ValueError("CONFIG_FILE must have a non-empty 'envs' object")
-        # Fill in ssl_ca_bundle default for each env
+        # Fill in ssl_ca_bundle default for each env.
+        # If expansion produced "", treat as unset so global SSL_CA_BUNDLE fallback applies.
         for env_cfg in envs.values():
             env_cfg.setdefault("ssl_ca_bundle", os.environ.get("SSL_CA_BUNDLE"))
+            if env_cfg.get("ssl_ca_bundle") == "":
+                env_cfg["ssl_ca_bundle"] = os.environ.get("SSL_CA_BUNDLE") or None
         return {
             "port": raw.get("port", port),
             "host": raw.get("host", host),
@@ -215,6 +222,20 @@ _token_cache_lock = threading.Lock()
 
 _inline_ca_cache: dict[str, str] = {}
 _inline_ca_lock = threading.Lock()
+
+
+def _cleanup_inline_ca_cache() -> None:
+    """Remove cached temp files for inline CA bundles on process exit."""
+    with _inline_ca_lock:
+        for path in _inline_ca_cache.values():
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        _inline_ca_cache.clear()
+
+
+atexit.register(_cleanup_inline_ca_cache)
 
 
 def _ca_bundle_path(ca_bundle: str | None) -> str | None:

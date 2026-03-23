@@ -427,8 +427,7 @@ LINTER_CONFIG_MAX_PER_FILE = 3000
 LINTER_CONFIG_MAX_TOTAL = 12_000
 
 GUIDELINES_PATHS = [
-    ".github/hawkeye-review.md",
-    ".hawkeye-review.md",
+    ".hawkeye/review.md",
 ]
 
 GUIDELINES_MAX_CHARS = 4000
@@ -1677,6 +1676,25 @@ def build_prompt(
 # ---------------------------------------------------------------------------
 
 
+class ClaudeAPIError(RuntimeError):
+    """Raised when the Claude API returns an error response."""
+
+
+def _claude_error_message(status: int, _body: Any) -> str:
+    """Return a user-friendly error message for a Claude API HTTP error."""
+    if status in (401, 403):
+        return (
+            f"Claude API authentication failed (HTTP {status}) — "
+            "check your Claude credentials (`CLAUDE_API_URL` / `CLAUDE_API_TOKEN`, "
+            "or `HAWKEYE_CLAUDE_API_URL` / `HAWKEYE_CLAUDE_BLOB` when set via the webhook server)."
+        )
+    if status == 429:
+        return "Claude API rate limit exceeded — please wait a moment and retry."
+    if status >= 500:
+        return f"Claude service error (HTTP {status}) — this is likely transient, please retry."
+    return f"Claude API error (HTTP {status}) — check your endpoint configuration."
+
+
 def call_claude(prompt: str, api_url: str, api_token: str) -> str:
     headers = {
         "Content-Type": "application/json",
@@ -1688,7 +1706,7 @@ def call_claude(prompt: str, api_url: str, api_token: str) -> str:
     }
     result = http_post(api_url, headers, payload, timeout=180)
     if result["status"] >= 400:
-        raise RuntimeError(f"Claude API error {result['status']}: {result['body']}")
+        raise ClaudeAPIError(_claude_error_message(result["status"], result["body"]))
     data = result["body"]
 
     stop_reason = data.get("stopReason", "")
@@ -2942,6 +2960,25 @@ def main() -> None:
 
         print("Done.", file=sys.stderr)
 
+    except ClaudeAPIError as exc:
+        print(f"  Claude API error: {exc}", file=sys.stderr)
+        error_body = (
+            f"<h2>{logo} HawkEye Review</h2>\n\n"
+            f"\u274c **Claude API error:** {exc}\n\n"
+            "Comment `@hawkeye review` to retry.\n\n"
+            f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
+            f"<sub>{AI_DISCLAIMER}</sub>"
+        )
+        if placeholder_id:
+            try:
+                edit_comment(owner, repo, placeholder_id, error_body, github_token)
+            except Exception as cleanup_exc:
+                print(f"  Placeholder update failed: {cleanup_exc}", file=sys.stderr)
+        try:
+            set_commit_status(owner, repo, head_sha, "error", str(exc), github_token)
+        except Exception as status_exc:
+            print(f"  Status update failed: {status_exc}", file=sys.stderr)
+        sys.exit(1)
     except Exception as exc:
         print(f"  Review failed: {exc}", file=sys.stderr)
         error_body = (

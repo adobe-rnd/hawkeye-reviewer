@@ -2792,7 +2792,11 @@ class _ProgressTracker:
         bar = self._bar(self._completed_batches, self._total_batches)
 
         if self._phase == "reduce":
-            phase_text = "Consolidating results across all batches..."
+            phase_text = (
+                "\u2705 <b>Map phase complete</b> — all batches reviewed.\n\n"
+                "\u23f3 <b>Reduce phase running</b> — consolidating results across all batches. "
+                "This may take a few minutes, please wait..."
+            )
         else:
             phase_text = "Reviewing batches in parallel..."
 

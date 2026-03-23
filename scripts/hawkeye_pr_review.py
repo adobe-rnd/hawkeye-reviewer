@@ -2833,8 +2833,8 @@ class _ProgressTracker:
             f"<tr><td><b>Batches</b></td><td>{batch_detail}</td></tr>\n"
             f"<tr><td><b>Files reviewed</b></td><td>{files_detail}</td></tr>\n"
             f"</table>\n\n"
-            f"<i>{phase_text}</i>\n\n"
-            f"<sub>This progress bar updates every ~{self._DEBOUNCE_SECS}s.</sub>"
+            f"<i>{phase_text}</i>"
+            + (f"\n\n<sub>This progress bar updates every ~{self._DEBOUNCE_SECS}s.</sub>" if self._phase != "reduce" else "")
         )
 
     def batch_done(self, num_files: int, failed: bool = False, reason: str = "") -> None:

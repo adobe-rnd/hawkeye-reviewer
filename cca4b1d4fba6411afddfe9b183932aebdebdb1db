@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "cca4b1d4fba6411afddfe9b183932aebdebdb1db",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-23T14:45:03+02:00",
+  "detection": {
+    "ai_assisted": false,
+    "method": "none",
+    "tool": "unknown",
+    "model": "",
+    "confidence": 0.0
+  },
+  "stats": {
+    "total_additions": 99,
+    "total_deletions": 20,
+    "ai_additions": 0,
+    "ai_deletions": 0,
+    "human_additions": 99,
+    "human_deletions": 20
+  },
+  "files": {
+    "README.md": {
+      "ai_additions": 0,
+      "human_additions": 7,
+      "ai_deletions": 0,
+      "human_deletions": 7
+    },
+    "scripts/encrypt_token.py": {
+      "ai_additions": 0,
+      "human_additions": 24,
+      "ai_deletions": 0,
+      "human_deletions": 7
+    },
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 0,
+      "human_additions": 1,
+      "ai_deletions": 0,
+      "human_deletions": 2
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 0,
+      "human_additions": 67,
+      "ai_deletions": 0,
+      "human_deletions": 4
+    }
+  }
+}

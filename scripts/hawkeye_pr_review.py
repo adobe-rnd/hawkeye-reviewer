@@ -2353,11 +2353,11 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
        any severity including critical or warning.
     4. **Unify** — produce a single, cohesive summary of the entire PR.
 
-    NOTE: Critical and warning comments from the batch reviews have already been
-    extracted and will be included in the final review automatically. The batch
-    comments below contain only suggestion/design/nitpick severity. Focus your
-    consolidation on these lower-severity comments, but DO add new critical or
-    warning comments if you discover cross-file issues.
+    NOTE: Critical comments from the batch reviews have already been extracted
+    and will be included in the final review automatically. The batch comments
+    below contain warning/suggestion/design/nitpick severity. Focus your
+    consolidation on these comments, but DO add new comments (of any appropriate
+    severity, including critical and warning) if you discover cross-file issues.
 
     ## Pull Request
     **Title:** {title}
@@ -3038,7 +3038,7 @@ def _review_map_reduce_inner(
 
     # Split batch comments: high-severity pass through directly,
     # low-severity go to reduce for consolidation.
-    _PASSTHROUGH_SEVERITIES = {"critical", "warning"}
+    _PASSTHROUGH_SEVERITIES = {"critical"}
     passthrough_comments: list[dict] = []
     reduce_batch_results: list[dict] = []
 
@@ -3064,11 +3064,11 @@ def _review_map_reduce_inner(
 
     total_low = sum(len(r.get("comments", [])) for r in reduce_batch_results)
     print(
-        f"  Passthrough: {len(deduped_passthrough)} critical/warning comment(s) "
+        f"  Passthrough: {len(deduped_passthrough)} critical comment(s) "
         f"({len(passthrough_comments) - len(deduped_passthrough)} duplicates removed).",
         file=sys.stderr,
     )
-    print(f"  Sending {total_low} suggestion/design/nitpick comment(s) to reduce phase.", file=sys.stderr)
+    print(f"  Sending {total_low} non-critical comment(s) to reduce phase.", file=sys.stderr)
 
     progress.set_reduce_phase()
     print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)
@@ -3113,7 +3113,7 @@ def _review_map_reduce_inner(
     summary = reduce_result.get("summary", {})
     reduce_comments = reduce_result.get("comments", [])
 
-    # Merge: passthrough critical/warning + reduce-consolidated low-severity
+    # Merge: passthrough critical + reduce-consolidated lower-severity
     all_comments = deduped_passthrough + reduce_comments
     print(
         f"  Reduce phase complete: {len(reduce_comments)} consolidated comment(s) "

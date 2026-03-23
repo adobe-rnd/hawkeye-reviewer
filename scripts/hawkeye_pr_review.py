@@ -2356,8 +2356,8 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
     NOTE: Critical comments from the batch reviews have already been extracted
     and will be included in the final review automatically. The batch comments
     below contain warning/suggestion/design/nitpick severity. Focus your
-    consolidation on these comments, but DO add new critical comments if you
-    discover cross-file issues.
+    consolidation on these comments, but DO add new comments (of any appropriate
+    severity, including critical and warning) if you discover cross-file issues.
 
     ## Pull Request
     **Title:** {title}
@@ -3068,7 +3068,7 @@ def _review_map_reduce_inner(
         f"({len(passthrough_comments) - len(deduped_passthrough)} duplicates removed).",
         file=sys.stderr,
     )
-    print(f"  Sending {total_low} warning/suggestion/design/nitpick comment(s) to reduce phase.", file=sys.stderr)
+    print(f"  Sending {total_low} non-critical comment(s) to reduce phase.", file=sys.stderr)
 
     progress.set_reduce_phase()
     print("  Running reduce phase (cross-file consolidation)...", file=sys.stderr)

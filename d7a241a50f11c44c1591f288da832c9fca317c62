@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "d7a241a50f11c44c1591f288da832c9fca317c62",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-23T23:13:48+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 151,
+    "total_deletions": 0,
+    "ai_additions": 151,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 151,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "14,632-650,2466,2472-2474,2554-2560,2563,2575,2684-2780,2793,2802,2818,2833-2841,2875-2876,2883,2887-2888,2892,2897,2924,3096",
+      "human_lines": ""
+    }
+  }
+}

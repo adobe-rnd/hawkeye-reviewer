@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "0ab4b52c3acd3c09e952aea3890a292501c5a55d",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-03-23T16:45:21+02:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "cursor",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 28,
+    "total_deletions": 0,
+    "ai_additions": 28,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/webhook_server.py": {
+      "ai_additions": 28,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-28",
+      "human_lines": ""
+    }
+  }
+}

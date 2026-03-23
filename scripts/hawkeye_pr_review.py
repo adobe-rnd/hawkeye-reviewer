@@ -3062,10 +3062,42 @@ def _review_map_reduce_inner(
             seen_keys.add(key)
             deduped_passthrough.append(c)
 
+    # Consolidate same-file passthrough comments (3+ on one file → single comment)
+    file_groups: dict[str, list[dict]] = {}
+    for c in deduped_passthrough:
+        file_groups.setdefault(c.get("path", ""), []).append(c)
+
+    consolidated_passthrough: list[dict] = []
+    merged_count = 0
+    for path, group in file_groups.items():
+        if len(group) < 3:
+            consolidated_passthrough.extend(group)
+        else:
+            # Merge into one comment on the earliest line
+            group.sort(key=lambda c: c.get("line", 0))
+            parts: list[str] = []
+            for c in group:
+                line = c.get("line", 0)
+                msg = c.get("message", "").strip()
+                parts.append(f"**Line {line}:** {msg}")
+            merged = {
+                "path": path,
+                "line": group[0]["line"],
+                "severity": "critical",
+                "message": (
+                    f"Multiple critical issues found in this file "
+                    f"({len(group)} findings):\n\n" + "\n\n---\n\n".join(parts)
+                ),
+            }
+            consolidated_passthrough.append(merged)
+            merged_count += len(group) - 1
+    deduped_passthrough = consolidated_passthrough
+
     total_low = sum(len(r.get("comments", [])) for r in reduce_batch_results)
+    dup_removed = len(passthrough_comments) - len(consolidated_passthrough) - merged_count
     print(
-        f"  Passthrough: {len(deduped_passthrough)} critical comment(s) "
-        f"({len(passthrough_comments) - len(deduped_passthrough)} duplicates removed).",
+        f"  Passthrough: {len(consolidated_passthrough)} critical comment(s) "
+        f"({dup_removed} duplicates removed, {merged_count} merged into same-file groups).",
         file=sys.stderr,
     )
     print(f"  Sending {total_low} non-critical comment(s) to reduce phase.", file=sys.stderr)

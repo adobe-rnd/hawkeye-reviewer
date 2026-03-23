@@ -137,9 +137,13 @@ def _expand_env_vars(obj: Any) -> Any:
         return [_expand_env_vars(v) for v in obj]
     if isinstance(obj, str):
         def replacer(m: re.Match) -> str:
-            var_name = m.group(1)
+            spec = m.group(1)
+            optional = spec.endswith(":-")
+            var_name = spec[:-2] if optional else spec
             value = os.environ.get(var_name)
             if value is None:
+                if optional:
+                    return ""
                 raise ValueError(
                     f"Environment variable '{var_name}' referenced in config is not set"
                 )
@@ -208,6 +212,29 @@ def load_config() -> dict[str, Any]:
 
 _token_cache: dict[tuple[str, int], tuple[str, float]] = {}
 _token_cache_lock = threading.Lock()
+
+_inline_ca_cache: dict[str, str] = {}
+_inline_ca_lock = threading.Lock()
+
+
+def _ca_bundle_path(ca_bundle: str | None) -> str | None:
+    """Return a file path for ca_bundle. Writes inline PEM to a temp file (cached)."""
+    if not ca_bundle:
+        return None
+    if "-----BEGIN" not in ca_bundle:
+        return ca_bundle
+    with _inline_ca_lock:
+        if ca_bundle not in _inline_ca_cache:
+            pem = ca_bundle.replace("\\n", "\n")
+            fd, path = tempfile.mkstemp(suffix=".pem", prefix="hawkeye-ca-")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    f.write(pem)
+            except Exception:
+                os.unlink(path)
+                raise
+            _inline_ca_cache[ca_bundle] = path
+        return _inline_ca_cache[ca_bundle]
 
 
 def _b64url(data: bytes | dict) -> str:
@@ -292,7 +319,13 @@ def _github_request(
 
     ctx = None
     if ca_bundle:
-        ctx = ssl.create_default_context(cafile=ca_bundle)
+        ctx = ssl.create_default_context()
+        if "-----BEGIN" in ca_bundle:
+            # Inline PEM from env var (e.g. SSL_CA_BUNDLE="-----BEGIN CERTIFICATE-----\n...")
+            pem = ca_bundle.replace("\\n", "\n")
+            ctx.load_verify_locations(cadata=pem)
+        else:
+            ctx.load_verify_locations(cafile=ca_bundle)
 
     try:
         with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
@@ -726,9 +759,10 @@ def invoke_review(
         "CLAUDE_API_TOKEN": api_token,
         "PLACEHOLDER_COMMENT_ID": str(placeholder_id),
     }
-    if env_cfg.get("ssl_ca_bundle"):
-        env["SSL_CERT_FILE"] = env_cfg["ssl_ca_bundle"]
-        env["REQUESTS_CA_BUNDLE"] = env_cfg["ssl_ca_bundle"]
+    ca_path = _ca_bundle_path(env_cfg.get("ssl_ca_bundle"))
+    if ca_path:
+        env["SSL_CERT_FILE"] = ca_path
+        env["REQUESTS_CA_BUNDLE"] = ca_path
 
     def _update_placeholder_error(message: str) -> None:
         if not placeholder_id:

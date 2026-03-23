@@ -322,7 +322,14 @@ def generate_github_app_jwt(
 
 
 class GitHubAPIError(RuntimeError):
-    """Raised when a GitHub API request fails with an HTTP error status."""
+    """Raised when a GitHub API request to GitHub fails.
+
+    This may represent either:
+      * an HTTP error response (non-2xx status code), in which case ``status``
+        contains the HTTP status code, or
+      * a network/transport failure (e.g., DNS resolution error, TLS failure,
+        connection timeout), in which case ``status`` will be 0.
+    """
 
     def __init__(self, message: str, status: int = 0):
         super().__init__(message)
@@ -693,7 +700,7 @@ def read_repo_credentials_file(
 # ---------------------------------------------------------------------------
 
 # Track in-flight reviews to prevent duplicate concurrent reviews on the same PR
-_inflight_reviews: set[str] = set()  # "owner/repo#pr_number"
+_inflight_reviews: set[str] = set()  # "env_name:owner/repo#pr_number"
 _inflight_lock = threading.Lock()
 
 

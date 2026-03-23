@@ -120,8 +120,12 @@ def _request(method: str, url: str, headers: dict, data: bytes | None = None, ti
         reason = str(exc.reason) if hasattr(exc, "reason") else str(exc)
         raise RuntimeError(f"{method} {url} network error: {reason}") from exc
     except OSError as exc:
-        # Covers socket.timeout and other low-level I/O errors
-        raise RuntimeError(f"{method} {url} timed out: {exc}") from exc
+        # Covers socket.timeout, connection reset, and other low-level I/O errors
+        if isinstance(exc, TimeoutError):
+            error_kind = "timed out"
+        else:
+            error_kind = "I/O error"
+        raise RuntimeError(f"{method} {url} {error_kind}: {exc}") from exc
 
 
 def github_get(url: str, token: str, params: dict | None = None) -> dict:
@@ -1707,10 +1711,16 @@ def call_claude(prompt: str, api_url: str, api_token: str, *, timeout: int = 180
         for c in contents:
             if isinstance(c, dict) and c.get("text"):
                 text = c["text"]
+                # Strip markdown fences first (in case prefill was ignored
+                # and the model wrapped its response in ```json ... ```)
+                stripped = text.strip()
+                stripped = re.sub(r"^```(?:json)?\s*\n?", "", stripped)
+                stripped = re.sub(r"\n?```\s*$", "", stripped)
+                stripped = stripped.strip()
                 # Prepend the prefilled opening brace
-                if not text.lstrip().startswith("{"):
-                    text = "{" + text
-                return text
+                if not stripped.startswith("{"):
+                    stripped = "{" + stripped
+                return stripped
         print("  WARNING: Claude response contained no text content blocks.", file=sys.stderr)
     except Exception as exc:
         print(f"  WARNING: unexpected Claude response structure: {exc}", file=sys.stderr)

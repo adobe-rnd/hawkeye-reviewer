@@ -280,6 +280,22 @@ def get_file_content(owner: str, repo: str, ref: str, path: str, token: str) -> 
     return content
 
 
+class ThreadSafeSet:
+    """A set wrapper with lock-guarded membership checks and additions."""
+
+    def __init__(self) -> None:
+        self._set: set[str] = set()
+        self._lock = threading.Lock()
+
+    def __contains__(self, item: str) -> bool:
+        with self._lock:
+            return item in self._set
+
+    def add(self, item: str) -> None:
+        with self._lock:
+            self._set.add(item)
+
+
 REPO_CONTEXT_FILES = [
     # Multi-language version managers
     ".tool-versions",
@@ -2470,8 +2486,9 @@ def build_batch_prompt(
     Returns (prompt_text, coverage) where coverage maps file path to
     review mode: "full", "diff-only", or "skipped".
 
-    *shared_fetched_paths* is a thread-safe set (guarded externally by a lock)
-    used to avoid re-fetching the same sibling/import files across batches.
+    *shared_fetched_paths* is an optional ``ThreadSafeSet`` (or plain set for
+    single-threaded use) used to avoid re-fetching the same sibling/import
+    files across batches.
     """
     all_files_lines = []
     for f in all_files:
@@ -2551,7 +2568,7 @@ def build_batch_prompt(
 
     files_text = "\n".join(included_files) if included_files else "(No reviewable file content.)"
 
-    fetched_paths: set[str] = shared_fetched_paths if shared_fetched_paths is not None else set()
+    fetched_paths = shared_fetched_paths if shared_fetched_paths is not None else set()
 
     # Skip sibling/import context for test-only batches — tests are best
     # reviewed against the source they test (already in the PR or related context).
@@ -2873,7 +2890,7 @@ def _review_map_reduce_inner(
     all_coverage: dict[str, str] = {}
     coverage_lock = threading.Lock()
     # Shared across batches so siblings/imports fetched by one batch are not re-fetched
-    shared_fetched_paths: set[str] = set()
+    shared_fetched_paths = ThreadSafeSet()
 
     def _run_batch(batch_idx: int, batch_files: list[dict]) -> dict:
         num = batch_idx + 1

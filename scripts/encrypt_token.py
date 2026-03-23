@@ -97,23 +97,35 @@ DEFAULT_PUBLIC_KEY = os.path.join(os.path.dirname(__file__), "..", "hawkeye-publ
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Encrypt a Claude API token for storage as a GitHub repo variable."
+        description=(
+            "Encrypt a Claude API token for secure storage as a GitHub repo variable.\n\n"
+            "Example:\n"
+            "  python3 encrypt_token.py --token \"YOUR_BEDROCK_API_KEY\"\n\n"
+            "The encrypted blob is then stored as HAWKEYE_CLAUDE_BLOB in your repo's\n"
+            "Settings → Secrets and variables → Actions → Variables."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--token",
         required=True,
-        help='Bedrock API token to encrypt',
+        metavar="TOKEN",
+        help=(
+            "The Bedrock API key to encrypt. This is the raw API key used to\n"
+            "authenticate requests to the Bedrock endpoint configured in\n"
+            "HAWKEYE_CLAUDE_API_URL on your repo.\n"
+            "Example: --token \"YOUR_BEDROCK_API_KEY\""
+        ),
     )
-    parser.add_argument(
-        "--public-key-file",
-        default=DEFAULT_PUBLIC_KEY,
-        help="Path to the server's RSA public key PEM file (default: hawkeye-public.pem)",
-    )
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(1)
     args = parser.parse_args()
+    public_key_file = DEFAULT_PUBLIC_KEY
 
-    with open(args.public_key_file) as f:
+    with open(public_key_file) as f:
         public_key_pem = f.read()
-    print(f"Using public key: {args.public_key_file}")
+    print(f"Using public key: {public_key_file}")
 
     if "PUBLIC KEY" not in public_key_pem:
         print("ERROR: Fetched content does not look like a PEM public key", file=sys.stderr)

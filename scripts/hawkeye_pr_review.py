@@ -731,8 +731,9 @@ def get_related_context(
             break
         blocks.append(block)
         total_chars += len(block)
-        print(f"  related context: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
 
+    if blocks:
+        print(f"  related context: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -1058,8 +1059,9 @@ def get_sibling_files(
         total_files += 1
         if fetched_paths is not None:
             fetched_paths.add(path)
-        print(f"  sibling: included {path} ({len(content)} chars)", file=sys.stderr)
 
+    if blocks:
+        print(f"  sibling: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -1181,8 +1183,9 @@ def get_imported_files(
         total_files += 1
         if fetched_paths is not None:
             fetched_paths.add(path)
-        print(f"  import: included {path} ({len(content)} chars, {reason})", file=sys.stderr)
 
+    if blocks:
+        print(f"  import: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 

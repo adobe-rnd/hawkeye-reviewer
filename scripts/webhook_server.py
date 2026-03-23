@@ -353,18 +353,6 @@ def _github_request(
     data = json.dumps(payload).encode() if payload else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
-    # Log CA bundle status for GHES (non-github.com) — helps debug SSL failures
-    is_ghes = "api.github.com" not in url
-    if is_ghes:
-        if ca_bundle:
-            kind = "inline" if "-----BEGIN" in ca_bundle else "path"
-            detail = f"{len(ca_bundle)} chars" if kind == "inline" else ca_bundle
-            logger.info(f"Using custom CA bundle for GHES ({kind}: {detail})")
-        else:
-            logger.warning(
-                "No custom CA bundle for GHES — SSL may fail. Set GHES_SSL_CA_BUNDLE."
-            )
-
     ctx = None
     if ca_bundle:
         ctx = ssl.create_default_context()
@@ -784,11 +772,26 @@ def invoke_review(
     try:
         _invoke_review_inner(
             env_name, env_cfg, script_path, owner, repo,
-            pr_number, placeholder_id, installation_token,
+            pr_number, placeholder_id, installation_token, repo_ctx,
         )
     finally:
         with _inflight_lock:
             _inflight_reviews.discard(review_key)
+
+
+def _log_subprocess_output(
+    stdout: str | None, stderr: str | None,
+    env_name: str, repo_ctx: str,
+    stderr_level: str = "info",
+) -> None:
+    """Log non-empty lines from subprocess stdout/stderr."""
+    log_stderr = warn if stderr_level == "warn" else info
+    for line in (stdout or "").splitlines():
+        if line.strip():
+            info(line, env=env_name, repo=repo_ctx)
+    for line in (stderr or "").splitlines():
+        if line.strip():
+            log_stderr(line, env=env_name, repo=repo_ctx)
 
 
 def _invoke_review_inner(
@@ -800,8 +803,8 @@ def _invoke_review_inner(
     pr_number: int,
     placeholder_id: int,
     installation_token: str,
+    repo_ctx: str,
 ) -> None:
-    repo_ctx = f"{owner}/{repo}#{pr_number}"
     info("Starting review subprocess", env=env_name, repo=repo_ctx)
     api_url, api_token = _resolve_api_credentials(
         env_cfg, owner, repo, installation_token
@@ -874,35 +877,19 @@ def _invoke_review_inner(
             stderr=subprocess.PIPE,
             text=True,
         )
-        for line in (result.stdout or "").splitlines():
-            if line.strip():
-                info(line, env=env_name, repo=repo_ctx)
-        for line in (result.stderr or "").splitlines():
-            if line.strip():
-                info(line, env=env_name, repo=repo_ctx)
+        _log_subprocess_output(result.stdout, result.stderr, env_name, repo_ctx)
         if result.returncode != 0:
             warn(f"Review subprocess exited {result.returncode}", env=env_name, repo=repo_ctx)
             _update_placeholder_error(f"The review script exited with code `{result.returncode}`.")
         else:
             info("Review complete", env=env_name, repo=repo_ctx)
     except subprocess.TimeoutExpired as exc:
-        for line in (exc.stdout or "").splitlines():
-            if line.strip():
-                info(line, env=env_name, repo=repo_ctx)
-        for line in (exc.stderr or "").splitlines():
-            if line.strip():
-                warn(line, env=env_name, repo=repo_ctx)
+        _log_subprocess_output(exc.stdout, exc.stderr, env_name, repo_ctx, stderr_level="warn")
         error("Review subprocess timed out after 900s", env=env_name, repo=repo_ctx)
         _update_placeholder_error("The review timed out after 15 minutes.")
     except Exception as exc:
-        stdout = getattr(exc, "stdout", None)
-        stderr = getattr(exc, "stderr", None)
-        for line in (stdout or "").splitlines():
-            if line.strip():
-                info(line, env=env_name, repo=repo_ctx)
-        for line in (stderr or "").splitlines():
-            if line.strip():
-                warn(line, env=env_name, repo=repo_ctx)
+        _log_subprocess_output(getattr(exc, "stdout", None), getattr(exc, "stderr", None),
+                               env_name, repo_ctx, stderr_level="warn")
         error(f"Review subprocess error: {exc}", env=env_name, repo=repo_ctx)
         _update_placeholder_error(f"Unexpected error: `{exc}`.")
 
@@ -1264,6 +1251,16 @@ def main() -> None:
     else:
         for name in env_names:
             info(f"Webhook URL  : POST /webhook/{name}")
+
+    # Log SSL CA bundle status once at startup (not on every request)
+    for name, env_cfg in cfg["envs"].items():
+        ca = env_cfg.get("ssl_ca_bundle")
+        if ca:
+            kind = "inline" if "-----BEGIN" in ca else "path"
+            detail = f"{len(ca)} chars" if kind == "inline" else ca
+            info(f"SSL CA bundle: {kind} ({detail})", env=name)
+        elif "api.github.com" not in env_cfg.get("github_api_url", ""):
+            warn(f"SSL CA bundle: not set — GHES SSL may fail", env=name)
 
     try:
         server.serve_forever()

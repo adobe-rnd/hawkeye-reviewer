@@ -519,7 +519,10 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
 # GitHub repo variables  (HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB)
 # ---------------------------------------------------------------------------
 
-_var_cache: dict[tuple, tuple[dict, float]] = {}
+_RepoVarsKey = tuple[str, str, str]       # (github_api_url, owner, repo)
+_CredFileKey = tuple[str, str, str, str]  # (github_api_url, owner, repo, "credfile")
+_VarCacheKey = _RepoVarsKey | _CredFileKey
+_var_cache: dict[_VarCacheKey, tuple[dict[str, str], float]] = {}
 _var_cache_lock = threading.Lock()
 _VAR_CACHE_TTL = 300  # 5 minutes
 
@@ -589,17 +592,22 @@ def read_repo_credentials_file(
             return cached[0]
 
     url = f"{github_api_url}/repos/{owner}/{repo}/contents/.hawkeye/credentials"
+    result: dict[str, str] = {}
     try:
         resp = _github_request("GET", url, token, ca_bundle=ca_bundle)
-        content = base64.b64decode(resp.get("content", "")).decode()
-        result: dict[str, str] = {}
-        for line in content.splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, _, v = line.partition("=")
-                result[k.strip()] = v.strip()
-    except Exception:
-        result = {}  # File not found, no permission, or invalid content — skip
+    except RuntimeError as e:
+        if "→ 403:" not in str(e) and "→ 404:" not in str(e):
+            raise  # Unexpected error — let caller log a warning
+    else:
+        try:
+            content = base64.b64decode(resp.get("content", "")).decode()
+            for line in content.splitlines():
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, _, v = line.partition("=")
+                    result[k.strip()] = v.strip()
+        except Exception:
+            pass  # Invalid base64 or encoding — skip
 
     with _var_cache_lock:
         _var_cache[key] = (result, time.time() + _VAR_CACHE_TTL)

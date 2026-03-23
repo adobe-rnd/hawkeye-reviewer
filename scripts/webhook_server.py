@@ -606,8 +606,8 @@ def read_repo_credentials_file(
                 if "=" in line and not line.startswith("#"):
                     k, _, v = line.partition("=")
                     result[k.strip()] = v.strip()
-        except Exception:
-            pass  # Invalid base64 or encoding — skip
+        except Exception as e:
+            warn(f"Failed to decode or parse .hawkeye/credentials for {owner}/{repo}: {e}")
 
     with _var_cache_lock:
         _var_cache[key] = (result, time.time() + _VAR_CACHE_TTL)
@@ -698,11 +698,14 @@ def invoke_review(
             try:
                 err_body = (
                     "<h2>⚠️ HawkEye Reviewer — credentials not configured</h2>\n\n"
-                    "This repo has no Claude API credentials set up.\n\n"
-                    "Ask your team admin to set the **`HAWKEYE_CLAUDE_API_URL`** and "
-                    "**`HAWKEYE_CLAUDE_BLOB`** Actions variables on this repo "
-                    "(see the [setup guide](https://github.com/adobe-rnd/hawkeye-reviewer) "
-                    "for instructions)."
+                    "This repo has no Claude API credentials set up. Choose one of:\n\n"
+                    "- **GitHub Actions Variables** (GHEC / GHES with Actions): "
+                    "set `HAWKEYE_CLAUDE_API_URL` and `HAWKEYE_CLAUDE_BLOB` in "
+                    "**Settings → Secrets and variables → Actions → Variables**\n"
+                    "- **Credentials file** (GHES without Actions): "
+                    "create `.hawkeye/credentials` in your repo with `HAWKEYE_CLAUDE_API_URL=...` "
+                    "and `HAWKEYE_CLAUDE_BLOB=...`\n\n"
+                    "See the [setup guide](https://github.com/adobe-rnd/hawkeye-reviewer) for instructions."
                 )
                 _github_request(
                     "PATCH",

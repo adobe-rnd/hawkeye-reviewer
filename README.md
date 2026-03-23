@@ -119,6 +119,20 @@ https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet
 
 That's it. Open a pull request and HawkEye will automatically post a review.
 
+#### Option B: `.hawkeye/credentials` (GHES without Actions)
+
+If your GitHub instance does not support Actions or repository variables (e.g. GitHub Enterprise Server without Actions enabled), create a credentials file in your repo instead:
+
+1. Run `encrypt_token.py` as above to get your encrypted blob.
+2. Create `.hawkeye/credentials` in your repo root:
+
+```
+HAWKEYE_CLAUDE_API_URL=https://bedrock-runtime...
+HAWKEYE_CLAUDE_BLOB=<encrypted blob from Step 2>
+```
+
+3. Commit and push — safe to commit since the token is encrypted with the server's RSA public key.
+
 > **Optional:** Create `.hawkeye/review.md` in your repo with project-specific instructions for the reviewer. See [Custom review guidelines](#custom-review-guidelines).
 
 ---

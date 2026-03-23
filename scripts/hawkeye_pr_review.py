@@ -1680,12 +1680,13 @@ class ClaudeAPIError(RuntimeError):
     """Raised when the Claude API returns an error response."""
 
 
-def _claude_error_message(status: int, body: Any) -> str:
+def _claude_error_message(status: int, _body: Any) -> str:
     """Return a user-friendly error message for a Claude API HTTP error."""
     if status in (401, 403):
         return (
             f"Claude API authentication failed (HTTP {status}) — "
-            "check your API key (`HAWKEYE_CLAUDE_API_URL` / `HAWKEYE_CLAUDE_BLOB`)."
+            "check your Claude credentials (`CLAUDE_API_URL` / `CLAUDE_API_TOKEN`, "
+            "or `HAWKEYE_CLAUDE_API_URL` / `HAWKEYE_CLAUDE_BLOB` when set via the webhook server)."
         )
     if status == 429:
         return "Claude API rate limit exceeded — please wait a moment and retry."

@@ -1251,6 +1251,18 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - Only return an empty "comments" array after you have carefully examined
       every changed file and genuinely found nothing actionable.
 
+    ## How to review
+
+    Work through each changed file **one at a time, in sequence**. For each file:
+    1. Read the diff to understand exactly what lines were added or changed.
+    2. Use the full file content to understand the surrounding context — the
+       function body, class, module structure, and any dependencies.
+    3. Apply every checklist category below to this file before moving on.
+    4. Write down all comments for this file, then proceed to the next.
+
+    Do not skim files or defer issues to a "later pass" — your output from this
+    single call is the complete review.
+
     ## What to look for
 
     Review like a senior engineer with 10+ years of experience. Work through each

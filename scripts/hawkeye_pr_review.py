@@ -1993,6 +1993,49 @@ def filter_comments(
     return filtered
 
 
+def consolidate_same_file_comments(comments: list[dict]) -> list[dict]:
+    """Merge 3+ same-severity comments on one file into a single grouped comment.
+
+    This reduces noise from repetitive findings (e.g., 7 instances of the same
+    pattern in one file) while preserving every finding in the merged body.
+    Comments are only merged within the same severity level.
+    """
+    # Group by (path, severity)
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for c in comments:
+        key = (c.get("path", ""), c.get("severity", "suggestion"))
+        groups.setdefault(key, []).append(c)
+
+    result: list[dict] = []
+    for (path, severity), group in groups.items():
+        if len(group) < 3:
+            result.extend(group)
+            continue
+        # Merge into one comment on the earliest line
+        group.sort(key=lambda c: c.get("line", 0))
+        parts: list[str] = []
+        for c in group:
+            line = c.get("line", 0)
+            msg = c.get("message", "").strip()
+            parts.append(f"**Line {line}:** {msg}")
+        label = SEVERITY_LABELS.get(severity, "Suggestion")
+        merged = {
+            "path": path,
+            "line": group[0].get("line", 0),
+            "severity": severity,
+            "message": (
+                f"Multiple {label.lower()} issues found in this file "
+                f"({len(group)} findings):\n\n" + "\n\n---\n\n".join(parts)
+            ),
+        }
+        result.append(merged)
+        print(
+            f"  Consolidated {len(group)} {severity} comment(s) on {path} into 1.",
+            file=sys.stderr,
+        )
+    return result
+
+
 def post_review(
     owner: str,
     repo: str,
@@ -3062,42 +3105,10 @@ def _review_map_reduce_inner(
             seen_keys.add(key)
             deduped_passthrough.append(c)
 
-    # Consolidate same-file passthrough comments (3+ on one file → single comment)
-    file_groups: dict[str, list[dict]] = {}
-    for c in deduped_passthrough:
-        file_groups.setdefault(c.get("path", ""), []).append(c)
-
-    consolidated_passthrough: list[dict] = []
-    merged_count = 0
-    for path, group in file_groups.items():
-        if len(group) < 3:
-            consolidated_passthrough.extend(group)
-        else:
-            # Merge into one comment on the earliest line
-            group.sort(key=lambda c: c.get("line", 0))
-            parts: list[str] = []
-            for c in group:
-                line = c.get("line", 0)
-                msg = c.get("message", "").strip()
-                parts.append(f"**Line {line}:** {msg}")
-            merged = {
-                "path": path,
-                "line": group[0]["line"],
-                "severity": "critical",
-                "message": (
-                    f"Multiple critical issues found in this file "
-                    f"({len(group)} findings):\n\n" + "\n\n---\n\n".join(parts)
-                ),
-            }
-            consolidated_passthrough.append(merged)
-            merged_count += len(group) - 1
-    deduped_passthrough = consolidated_passthrough
-
     total_low = sum(len(r.get("comments", [])) for r in reduce_batch_results)
-    dup_removed = len(passthrough_comments) - len(consolidated_passthrough) - merged_count
     print(
-        f"  Passthrough: {len(consolidated_passthrough)} critical comment(s) "
-        f"({dup_removed} duplicates removed, {merged_count} merged into same-file groups).",
+        f"  Passthrough: {len(deduped_passthrough)} critical comment(s) "
+        f"({len(passthrough_comments) - len(deduped_passthrough)} duplicates removed).",
         file=sys.stderr,
     )
     print(f"  Sending {total_low} non-critical comment(s) to reduce phase.", file=sys.stderr)
@@ -3329,6 +3340,10 @@ def main() -> None:
             print(f"  Found {len(existing)} existing review comment(s) for dedup.", file=sys.stderr)
         comments = filter_comments(raw_comments, valid_lines, existing)
         print(f"  {len(comments)} comment(s) survived filtering.", file=sys.stderr)
+        pre_consolidation = len(comments)
+        comments = consolidate_same_file_comments(comments)
+        if len(comments) < pre_consolidation:
+            print(f"  {len(comments)} comment(s) after same-file consolidation.", file=sys.stderr)
 
         total_additions = sum(f.get("additions", 0) for f in files)
         if not comments and total_additions >= MIN_ADDITIONS_FOR_RETRY:

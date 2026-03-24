@@ -270,6 +270,7 @@ HawkEye assembles a layered context window so Claude understands your codebase �
 | Project documentation | 8K | `README.md`, `CONTRIBUTING.md`, `ARCHITECTURE.md`, `.cursorrules` |
 | Custom guidelines | 4K | `.hawkeye/review.md` — team-specific instructions |
 | Related context | 15K | Auto-inferred test files and build configs |
+| PR description refs | 20K | Files explicitly mentioned in the PR title or description |
 | **Changed files (diff)** | **180K** | Full content + unified diff |
 
 ### Smart file inclusion
@@ -388,15 +389,16 @@ Every review follows the same pipeline:
 HawkEye uses four independent layers to keep the signal-to-noise ratio high.
 
 #### 1. Prompt constraints — Claude is instructed to:
-- Comment **only on added lines** (`+` in the diff) — pre-existing code cannot be flagged
+- Focus on **added lines** (`+` in the diff) — unchanged context lines may only be flagged when new additions make an existing issue newly relevant
 - Skip style and formatting preferences
 - Respect your linter rules — every suggestion must pass your configured linter
 - Keep each comment to 1–3 sentences
 - Avoid patterns incompatible with the project's declared runtime or frameworks
 
 #### 2. Post-response filtering — always runs in code, regardless of what Claude returned:
-- Comments on lines not present in the diff are **dropped** (guards against hallucinated line numbers)
+- Comments on lines not present in the diff hunk are **dropped** (guards against hallucinated line numbers)
 - Comments matching an existing `(path, line, severity)` tuple are **deduplicated** (re-reviews don't repeat old feedback)
+- Comments with the same `(path, line, severity)` within a single review are **deduplicated** (prevents duplicate comments across map-reduce batches)
 
 #### 3. Reduce-phase deduplication — map-reduce only:
 - Duplicate comments across batches are collapsed into one

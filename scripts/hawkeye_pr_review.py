@@ -748,7 +748,7 @@ DESC_FILES_MAX_COUNT = 8
 _DESC_FILE_REF_RE = re.compile(
     r"""(?:^|[\s`'"(\[,;:])"""         # boundary before
     r"""("""
-    r"""[a-zA-Z0-9_]"""               # must start with word char
+    r"""\.?[a-zA-Z0-9_]"""            # optional leading dot (for .github/, .env), then word char
     r"""[a-zA-Z0-9_./-]*"""           # path body
     r"""\."""                          # dot before extension
     r"""[a-zA-Z][a-zA-Z0-9]{0,9}"""   # extension (1-10 chars)
@@ -769,15 +769,15 @@ def _extract_file_references(text: str) -> list[str]:
     seen: set[str] = set()
     results: list[str] = []
     for m in _DESC_FILE_REF_RE.finditer(cleaned):
-        ref = m.group(1).strip(".")
+        ref = m.group(1).rstrip(".")
         if ref in seen:
             continue
         seen.add(ref)
         # Skip URLs
         if ref.startswith("http") or ref.startswith("//"):
             continue
-        # Skip version numbers like v1.4.5 or 3.12
-        if re.match(r"^v?\d+\.\d+", ref):
+        # Skip version numbers like v1.4.5 or 3.12 (entire ref is a version)
+        if re.fullmatch(r"v?\d+\.\d+(?:\.\d+)?", ref):
             continue
         results.append(ref)
     return results
@@ -1325,10 +1325,14 @@ def get_diff_lines(patch: str) -> set[int]:
         return set()
     lines: set[int] = set()
     current_line = 0
+    in_hunk = False
     for raw in patch.splitlines():
         hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
         if hunk_match:
             current_line = int(hunk_match.group(1))
+            in_hunk = True
+            continue
+        if not in_hunk:
             continue
         if raw.startswith("-") and not raw.startswith("--- "):
             continue

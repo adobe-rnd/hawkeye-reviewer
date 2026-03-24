@@ -738,6 +738,132 @@ def get_related_context(
 
 
 # ---------------------------------------------------------------------------
+# Files referenced in PR description
+# ---------------------------------------------------------------------------
+
+DESC_FILES_MAX_PER_FILE = 4_000
+DESC_FILES_MAX_TOTAL = 20_000
+DESC_FILES_MAX_COUNT = 8
+
+_DESC_FILE_REF_RE = re.compile(
+    r"""(?:^|[\s`'"(\[,;:])"""         # boundary before
+    r"""("""
+    r"""[a-zA-Z0-9_]"""               # must start with word char
+    r"""[a-zA-Z0-9_./-]*"""           # path body
+    r"""\."""                          # dot before extension
+    r"""[a-zA-Z][a-zA-Z0-9]{0,9}"""   # extension (1-10 chars)
+    r""")"""
+    r"""(?:[\s`'")\],:;!?]|$)""",     # boundary after
+    re.MULTILINE,
+)
+
+
+def _strip_code_blocks(text: str) -> str:
+    """Remove fenced code blocks from markdown text."""
+    return re.sub(r"```[\s\S]*?```", "", text)
+
+
+def _extract_file_references(text: str) -> list[str]:
+    """Extract potential file path references from PR description text."""
+    cleaned = _strip_code_blocks(text)
+    seen: set[str] = set()
+    results: list[str] = []
+    for m in _DESC_FILE_REF_RE.finditer(cleaned):
+        ref = m.group(1).strip(".")
+        if ref in seen:
+            continue
+        seen.add(ref)
+        # Skip URLs
+        if ref.startswith("http") or ref.startswith("//"):
+            continue
+        # Skip version numbers like v1.4.5 or 3.12
+        if re.match(r"^v?\d+\.\d+", ref):
+            continue
+        results.append(ref)
+    return results
+
+
+def _resolve_file_reference(ref: str, tree_paths: set[str]) -> str | None:
+    """Resolve a file reference from PR description to an actual repo path."""
+    if ref in tree_paths:
+        return ref
+    # Suffix match for partial paths (e.g. "cors.py" or "utils/cors.py")
+    matches = [p for p in tree_paths if p.endswith("/" + ref)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def get_description_referenced_files(
+    pr_info: dict,
+    tree_paths: set[str] | None,
+    owner: str,
+    repo: str,
+    ref: str,
+    token: str,
+    changed_paths: set[str] | None = None,
+    fetched_paths: set[str] | None = None,
+) -> str:
+    """Fetch files explicitly mentioned in the PR title or description."""
+    if not tree_paths:
+        return ""
+
+    body = pr_info.get("body") or ""
+    title = pr_info.get("title") or ""
+    text = f"{title}\n{body}"
+
+    candidates = _extract_file_references(text)
+    if not candidates:
+        return ""
+
+    # Resolve and deduplicate
+    resolved: dict[str, str] = {}  # repo path -> reference string used
+    for ref_str in candidates:
+        if len(resolved) >= DESC_FILES_MAX_COUNT:
+            break
+        path = _resolve_file_reference(ref_str, tree_paths)
+        if not path or path in resolved:
+            continue
+        if changed_paths and path in changed_paths:
+            continue
+        if fetched_paths is not None and path in fetched_paths:
+            continue
+        resolved[path] = ref_str
+
+    if not resolved:
+        return ""
+
+    blocks: list[str] = []
+    total_chars = 0
+
+    for path, ref_str in resolved.items():
+        if total_chars >= DESC_FILES_MAX_TOTAL:
+            break
+
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+
+        if fetched_paths is not None:
+            fetched_paths.add(path)
+
+        truncated = content[:DESC_FILES_MAX_PER_FILE]
+        if len(content) > DESC_FILES_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+
+        block = f"### {path}\n_Referenced as `{ref_str}` in PR description_\n```\n{truncated}\n```"
+        if total_chars + len(block) > DESC_FILES_MAX_TOTAL:
+            break
+
+        blocks.append(block)
+        total_chars += len(block)
+
+    if blocks:
+        print(f"  description refs: {len(blocks)} file(s), {total_chars} chars", file=sys.stderr)
+    return "\n\n".join(blocks)
+
+
+# ---------------------------------------------------------------------------
 # Repository structure (directory tree)
 # ---------------------------------------------------------------------------
 
@@ -1190,7 +1316,11 @@ def get_imported_files(
 
 
 def get_diff_lines(patch: str) -> set[int]:
-    """Parse a unified diff patch and return line numbers (new file side) that live inside a hunk."""
+    """Parse a unified diff patch and return line numbers (new file side) that live inside a hunk.
+
+    Includes both added (+) lines and context (unchanged) lines so the
+    reviewer can flag existing code that interacts with new additions.
+    """
     if not patch:
         return set()
     lines: set[int] = set()
@@ -1206,6 +1336,7 @@ def get_diff_lines(patch: str) -> set[int]:
             lines.add(current_line)
             current_line += 1
         elif not raw.startswith("+++ "):
+            lines.add(current_line)
             current_line += 1
     return lines
 
@@ -1256,7 +1387,11 @@ REVIEW_PROMPT = textwrap.dedent("""\
     ```
 
     ## Rules
-    - Only comment on lines that appear as ADDED (+) in each file's DIFF section.
+    - Comment on lines that appear in each file's DIFF section. Focus on ADDED (+)
+      lines, but you may also flag unchanged context lines within the same diff
+      hunk when the additions make an existing issue newly relevant — e.g. new
+      code relies on a nearby function with a bug, or new configuration conflicts
+      with existing configuration in the same block.
     - "suggestion" must be the exact replacement code (no line-number prefix, no
       explanation) so it can be used in a GitHub "suggested change" block.
       Multi-line suggestions are fine (separate lines with \\n).
@@ -1407,6 +1542,8 @@ REVIEW_PROMPT = textwrap.dedent("""\
     {import_section}
 
     {related_context_section}
+
+    {description_files_section}
 
     ## Changed files
 
@@ -1685,6 +1822,18 @@ def build_prompt(
         f"{related_context}"
     ) if related_context else ""
 
+    desc_files_context = get_description_referenced_files(
+        pr_info, tree_paths, owner, repo, head_sha, token,
+        changed_paths={f["filename"] for f in files},
+        fetched_paths=fetched_paths,
+    )
+    description_files_section = (
+        "## Files referenced in PR description\n\n"
+        "These files are NOT being changed but were mentioned in the PR description. "
+        "Use them to understand the context and verify the changes are correct and complete.\n\n"
+        f"{desc_files_context}"
+    ) if desc_files_context else ""
+
     return REVIEW_PROMPT.format(
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
@@ -1696,6 +1845,7 @@ def build_prompt(
         sibling_section=sibling_section,
         import_section=import_section,
         related_context_section=related_context_section,
+        description_files_section=description_files_section,
         files_text=files_text,
     )
 
@@ -1969,9 +2119,10 @@ def filter_comments(
     valid_lines: dict[str, set[int]],
     existing_comments: set[tuple[str, int, str]],
 ) -> list[dict]:
-    """Filter out comments that are outside the diff or already posted."""
+    """Filter out comments that are outside the diff, already posted, or duplicated within this review."""
     filtered: list[dict] = []
     deduped = 0
+    seen: set[tuple[str, int, str]] = set()
     for c in inline_comments:
         path = c.get("path", "")
         line = c.get("line")
@@ -1982,10 +2133,12 @@ def filter_comments(
             continue
         sev = c.get("severity", "suggestion")
         label = SEVERITY_LABELS.get(sev, "Suggestion")
-        if (path, line, label) in existing_comments:
+        key = (path, line, label)
+        if key in existing_comments or key in seen:
             deduped += 1
             print(f"  Skipped (duplicate): {path}:{line} [{label}]", file=sys.stderr)
             continue
+        seen.add(key)
         filtered.append(c)
 
     if deduped:
@@ -2124,8 +2277,10 @@ RETRY_PROMPT = textwrap.dedent("""\
     }}
     ```
 
-    Only comment on ADDED (+) lines. If you still genuinely find nothing after
-    careful re-examination, return {{"comments": []}}.
+    Comment on lines in the DIFF — focus on ADDED (+) lines, but you may also
+    flag unchanged context lines when additions make an existing issue relevant.
+    If you still genuinely find nothing after careful re-examination, return
+    {{"comments": []}}.
 
     If you produce any "suggestion" fields, they MUST comply with the project's
     linter/formatter rules (if provided below). A suggestion that introduces a
@@ -2249,7 +2404,11 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     ```
 
     ## Rules
-    - Only comment on lines that appear as ADDED (+) in each file's DIFF section.
+    - Comment on lines that appear in each file's DIFF section. Focus on ADDED (+)
+      lines, but you may also flag unchanged context lines within the same diff
+      hunk when the additions make an existing issue newly relevant — e.g. new
+      code relies on a nearby function with a bug, or new configuration conflicts
+      with existing configuration in the same block.
     - "suggestion" must be the exact replacement code (no line-number prefix, no
       explanation) so it can be used in a GitHub "suggested change" block.
       Multi-line suggestions are fine (separate lines with \\n).
@@ -2374,6 +2533,8 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
 
     {related_context_section}
 
+    {description_files_section}
+
     ## Files to review
 
     {files_text}
@@ -2444,7 +2605,9 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
     ```
 
     ## Rules
-    - Only comment on lines that appear as ADDED (+) in each file's DIFF.
+    - Comment on lines that appear in each file's DIFF. Focus on ADDED (+) lines,
+      but also allow comments on unchanged context lines within the same hunk when
+      the additions make an existing issue newly relevant.
     - "suggestion" must be the exact replacement code for GitHub suggested changes.
       Multi-line suggestions are fine (separate lines with \\n).
     - If linter/formatter configurations are provided, every "suggestion" you
@@ -2705,6 +2868,7 @@ def build_batch_prompt(
         sibling_section=sibling_section,
         import_section=import_section,
         related_context_section=related_context_section,
+        description_files_section=shared_context.get("description_files_section", ""),
         files_text=files_text,
     )
     return prompt, coverage
@@ -2967,6 +3131,19 @@ def _review_map_reduce_inner(
     shared_context = fetch_shared_context(
         owner, repo, head_sha, github_token, repo_tree, tree_paths,
     )
+
+    # Fetch files referenced in the PR description (shared across all batches)
+    changed_paths = {f["filename"] for f in files}
+    desc_files_context = get_description_referenced_files(
+        pr_info, tree_paths, owner, repo, head_sha, github_token,
+        changed_paths=changed_paths,
+    )
+    shared_context["description_files_section"] = (
+        "## Files referenced in PR description\n\n"
+        "These files are NOT being changed but were mentioned in the PR description. "
+        "Use them to understand the context and verify the changes are correct and complete.\n\n"
+        f"{desc_files_context}"
+    ) if desc_files_context else ""
 
     if batches is None:
         batches = group_files_into_batches(files)

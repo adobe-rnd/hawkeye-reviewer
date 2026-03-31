@@ -438,25 +438,70 @@ The numbers below are the caps for the **changed files section** of each prompt.
 
 Latency is dominated by Claude response time — typically **1–3 minutes** per review.
 
-**Claude Sonnet 4.6**
+**Claude Sonnet 4.6** ($3 / $15 per 1M input / output tokens)
 
-| PR size | Mode | API calls | Est. cost | Est. latency |
-|---------|------|-----------|-----------|--------------|
-| 500 lines, 4 files | Single-pass | 1 | ~$0.15 | ~1 min |
-| 1K lines, 6 files | Single-pass | 1 | ~$0.25 | ~2 min |
-| 2K lines, 12 files | Map-reduce | 3+1 | ~$0.55 | ~2–3 min |
-| 5K lines, 25 files | Map-reduce | 4+1 | ~$1.00 | ~3–5 min |
+| PR size | Mode | API calls | Est. tokens | Est. cost | Est. latency |
+|---------|------|-----------|-------------|-----------|--------------|
+| 500 lines, 4 files | Single-pass | 1 | ~35K | ~$0.15 | ~1 min |
+| 1K lines, 6 files | Single-pass | 1 | ~60K | ~$0.25 | ~2 min |
+| 2K lines, 12 files | Map-reduce | 3+1 | ~130K | ~$0.55 | ~2–3 min |
+| 5K lines, 25 files | Map-reduce | 4+1 | ~240K | ~$1.00 | ~3–5 min |
 
-**Claude Opus 4.6**
+**Claude Opus 4.6** ($15 / $75 per 1M input / output tokens)
 
-| PR size | Mode | API calls | Est. cost | Est. latency |
-|---------|------|-----------|-----------|--------------|
-| 500 lines, 4 files | Single-pass | 1 | ~$0.25 | ~1 min |
-| 1K lines, 6 files | Single-pass | 1 | ~$0.50 | ~2 min |
-| 2K lines, 12 files | Map-reduce | 3+1 | ~$1.00 | ~2–3 min |
-| 5K lines, 25 files | Map-reduce | 4+1 | ~$2.00 | ~3–5 min |
+| PR size | Mode | API calls | Est. tokens | Est. cost | Est. latency |
+|---------|------|-----------|-------------|-----------|--------------|
+| 500 lines, 4 files | Single-pass | 1 | ~35K | ~$0.70 | ~1 min |
+| 1K lines, 6 files | Single-pass | 1 | ~60K | ~$1.20 | ~2 min |
+| 2K lines, 12 files | Map-reduce | 3+1 | ~130K | ~$2.75 | ~2–3 min |
+| 5K lines, 25 files | Map-reduce | 4+1 | ~240K | ~$5.00 | ~3–5 min |
 
-> Cost figures are estimates. Prompts rarely hit the character ceiling, so real costs are often lower.
+> Cost = `input_tokens × input_price + output_tokens × output_price`. Token counts are identical across models — only per-token pricing differs. Prices shown are standard Bedrock on-demand rates; your actual rate may vary by contract or commitment tier.
+
+### How token estimates are derived
+
+Total tokens per review = sum of (input + output) tokens across all API calls. Conversion factor: **~4 characters per token** (code averages slightly fewer due to operators and short identifiers; the README's own caps use 3.4–3.6 chars/token for code-heavy sections).
+
+**Input composition per API call:**
+
+| Component | Typical size | Source |
+|-----------|-------------|--------|
+| System prompt (review checklist, severity levels, output format, examples) | ~3K tokens | Fixed per call |
+| Context layers (see breakdown below) | 10–18K tokens | Scales with repo complexity |
+| Changed files (full source + diff, or compact representation + diff) | 12–40K tokens | Scales with lines changed and file count |
+
+**Context layer breakdown** (character caps from code → typical utilization at 50–70%):
+
+| Layer | Cap | Typical | Tokens (typical) |
+|-------|-----|---------|-------------------|
+| PR information (title + description) | ~2K chars | ~800 chars | ~200 |
+| Repository configs (`package.json`, `tsconfig.json`, `Dockerfile`, etc.) | 12K chars | ~6K chars | ~1,500 |
+| Repository tree (full directory listing) | 8K chars | ~5K chars | ~1,300 |
+| Sibling files (up to 5 files from changed directories) | 18K chars | ~10K chars | ~2,500 |
+| Imported modules (up to 10 local modules referenced in diffs) | 20K chars | ~10K chars | ~2,500 |
+| Linter / formatter configs (64+ supported patterns) | 12K chars | ~4K chars | ~1,000 |
+| Project docs (`README.md`, `CONTRIBUTING.md`, etc.) | 8K chars | ~5K chars | ~1,300 |
+| Related context (auto-inferred test files, build configs) | 15K chars | ~6K chars | ~1,500 |
+| Custom guidelines (`.hawkeye/review.md`) | 4K chars | ~1K chars | ~250 |
+| PR description refs (files mentioned in title/description) | 20K chars | ~2K chars | ~500 |
+| **Context subtotal** | **119K chars** | **~50K chars** | **~12,500** |
+
+**Output tokens per call:** 3–6K tokens (JSON summary + inline review comments) — scales with the number of findings. Output is capped at 16,384 tokens per batch/single-pass call and 32,768 tokens for the reduce phase.
+
+**Per-scenario breakdown (input / output / total):**
+
+| PR size | Calls | Input | Output | Total |
+|---------|-------|-------|--------|-------|
+| 500 lines, 4 files | 1 | ~32K | ~3K | **~35K** |
+| 1K lines, 6 files | 1 | ~55K | ~5K | **~60K** |
+| 2K lines, 12 files | 3 batch + 1 reduce | ~117K | ~13K | **~130K** |
+| 5K lines, 25 files | 4 batch + 1 reduce | ~218K | ~22K | **~240K** |
+
+**Single-pass** (rows 1–2): one API call with the full prompt. Input = system prompt (~3K) + context layers (~12–16K) + changed files section (capped at 180K chars). A 500-line PR uses roughly 65K chars of the 180K file budget → ~17K file tokens; a 1K-line PR uses ~130K chars → ~35K file tokens.
+
+**Map-reduce** (rows 3–4): each batch call repeats the system prompt and context layers (~15–20K overhead) plus that batch's files (capped at 120K chars per batch, batched at 80K chars by the grouping algorithm). The reduce call is the largest single call — it receives all file diffs (up to 200K chars) and all aggregated batch results (up to 120K chars) for cross-file deduplication and consolidation. For a 12-file PR, the reduce call uses ~33K input tokens; for a 25-file PR, ~58K input tokens.
+
+**Why actuals are lower than caps:** Most repos don't have 10 imported modules, 5 sibling files, 12K of linter configs, and 20K of referenced files simultaneously. Smart file inclusion further saves 40–60% on file content through compact representations for files over 200 lines. The estimates above assume typical utilization (50–70% of character caps) rather than worst-case ceilings.
 
 ### Reducing cost
 

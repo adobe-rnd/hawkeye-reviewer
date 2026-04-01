@@ -2175,7 +2175,7 @@ def post_review(
     }
     result = github_post(review_url, token, payload)
 
-    if result["status"] in (422, 500, 502, 503) and review_comments:
+    if (result["status"] == 422 or 500 <= result["status"] < 600) and review_comments:
         print(f"Batch review returned {result['status']} — retrying: body-only review + individual comments...", file=sys.stderr)
         # Submit summary as a review first
         body_result = github_post(review_url, token, {

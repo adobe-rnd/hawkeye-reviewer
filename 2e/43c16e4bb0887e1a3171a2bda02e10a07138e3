@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "2e43c16e4bb0887e1a3171a2bda02e10a07138e3",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-04-05T15:17:33+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 20,
+    "total_deletions": 0,
+    "ai_additions": 20,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/ghes_circleci_runner.py": {
+      "ai_additions": 6,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "258,291-293,302-303",
+      "human_lines": ""
+    },
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 1,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "23",
+      "human_lines": ""
+    },
+    "scripts/webhook_server.py": {
+      "ai_additions": 13,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "467,472-476,839-842,851-852,973",
+      "human_lines": ""
+    }
+  }
+}

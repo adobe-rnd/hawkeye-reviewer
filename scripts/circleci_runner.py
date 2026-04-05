@@ -116,14 +116,25 @@ def find_installation_id(
         except GitHubAPIError:
             continue
 
-    # Fallback: list all installations and match by account login
+    # Fallback: list all installations and match by account login.
+    # This endpoint is paginated on github.com, so scan pages explicitly.
+    per_page = 100
     try:
-        installations = _github_request(
-            "GET", f"{api_url}/app/installations", jwt, ca_bundle=ca_bundle,
-        )
-        for inst in installations:
-            if inst.get("account", {}).get("login", "").lower() == owner.lower():
-                return inst["id"]
+        for page in range(1, 101):
+            query = urllib.parse.urlencode({"per_page": per_page, "page": page})
+            installations = _github_request(
+                "GET",
+                f"{api_url}/app/installations?{query}",
+                jwt,
+                ca_bundle=ca_bundle,
+            )
+            if not installations:
+                break
+            for inst in installations:
+                if inst.get("account", {}).get("login", "").lower() == owner.lower():
+                    return inst["id"]
+            if len(installations) < per_page:
+                break
     except GitHubAPIError as exc:
         print(f"WARNING: Failed to list installations: {exc}", file=sys.stderr)
 
@@ -234,13 +245,28 @@ def main() -> None:
     print(f"[HawkEye] Repo: {owner}/{repo}  Branch: {branch}  SHA: {sha[:8]}")
 
     # -- GitHub config (generalized with GHES fallback) ------------------------
-    api_url = _env("HAWKEYE_GITHUB_API_URL", "GITHUB_API_URL",
-                    default="https://api.github.com")
+    explicit_api_url = _env("HAWKEYE_GITHUB_API_URL", "GITHUB_API_URL")
     app_id = _env("HAWKEYE_APP_ID", "GHES_APP_ID")
     private_key = _env("HAWKEYE_APP_PRIVATE_KEY", "GHES_APP_PRIVATE_KEY")
     private_key = private_key.replace("\\n", "\n")
     app_slug = _env("HAWKEYE_APP_SLUG", "GHES_APP_SLUG")
     ca_bundle = _env("HAWKEYE_SSL_CA_BUNDLE", "GHES_SSL_CA_BUNDLE") or None
+
+    # If legacy GHES_* vars or a CA bundle are present, require an explicit API
+    # URL — don't silently default to api.github.com for a GHES-oriented setup.
+    ghes_indicators = any(os.environ.get(v) for v in (
+        "GHES_APP_ID", "GHES_APP_PRIVATE_KEY", "GHES_APP_SLUG",
+        "GHES_SSL_CA_BUNDLE", "HAWKEYE_SSL_CA_BUNDLE",
+    ))
+    if explicit_api_url:
+        api_url = explicit_api_url
+    elif ghes_indicators:
+        print("ERROR: HAWKEYE_GITHUB_API_URL or GITHUB_API_URL must be set "
+              "when using legacy GHES_* settings or a custom CA bundle.",
+              file=sys.stderr)
+        sys.exit(1)
+    else:
+        api_url = "https://api.github.com"
 
     if not app_id or not private_key:
         print("ERROR: HAWKEYE_APP_ID and HAWKEYE_APP_PRIVATE_KEY must be set "

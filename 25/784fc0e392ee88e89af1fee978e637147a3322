@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "25784fc0e392ee88e89af1fee978e637147a3322",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-04-05T13:35:52+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 37,
+    "total_deletions": 0,
+    "ai_additions": 37,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "circleci-ghes-config.yml": {
+      "ai_additions": 7,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "10-11,14-17,34",
+      "human_lines": ""
+    },
+    "scripts/ghes_circleci_runner.py": {
+      "ai_additions": 30,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "35,66-67,83-99,173,207,213-215,262-266",
+      "human_lines": ""
+    }
+  }
+}

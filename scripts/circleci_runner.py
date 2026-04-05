@@ -87,6 +87,13 @@ def find_pr_for_branch(
         if prs:
             return prs[0]["number"]
     except GitHubAPIError as exc:
+        if exc.status == 404:
+            print(f"ERROR: Got 404 querying PRs for {owner}/{repo}. "
+                  f"The GitHub App is likely not installed on this repository. "
+                  f"Try installing the app on your repo or ask for support "
+                  f"on #hawkeye-pr-reviewer-support on Slack.",
+                  file=sys.stderr)
+            sys.exit(1)
         print(f"WARNING: Failed to query PRs: {exc}", file=sys.stderr)
     return None
 

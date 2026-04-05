@@ -119,8 +119,9 @@ def find_installation_id(
     # Fallback: list all installations and match by account login.
     # This endpoint is paginated on github.com, so scan pages explicitly.
     per_page = 100
+    max_pages = 100
     try:
-        for page in range(1, 101):
+        for page in range(1, max_pages + 1):
             query = urllib.parse.urlencode({"per_page": per_page, "page": page})
             installations = _github_request(
                 "GET",
@@ -135,6 +136,10 @@ def find_installation_id(
                     return inst["id"]
             if len(installations) < per_page:
                 break
+        else:
+            print(f"WARNING: Scanned {max_pages} pages of installations "
+                  f"({max_pages * per_page} entries) without finding '{owner}'",
+                  file=sys.stderr)
     except GitHubAPIError as exc:
         print(f"WARNING: Failed to list installations: {exc}", file=sys.stderr)
 

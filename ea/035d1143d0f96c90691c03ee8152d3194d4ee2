@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "ea035d1143d0f96c90691c03ee8152d3194d4ee2",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-04-05T14:07:10+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 15,
+    "total_deletions": 0,
+    "ai_additions": 15,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/ghes_circleci_runner.py": {
+      "ai_additions": 15,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "85-86,88,101-112",
+      "human_lines": ""
+    }
+  }
+}

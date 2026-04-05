@@ -29,11 +29,10 @@ CircleCI provides automatically:
   CIRCLE_SHA1               commit SHA
 """
 
-import json
 import os
 import subprocess
 import sys
-import time
+import urllib.parse
 
 # Allow imports from the same directory (scripts/)
 sys.path.insert(0, os.path.dirname(__file__))
@@ -64,10 +63,8 @@ def find_pr_for_branch(
     ca_bundle: str | None,
 ) -> int | None:
     """Find the open PR number whose head branch matches *branch*."""
-    url = (
-        f"{api_url}/repos/{owner}/{repo}/pulls"
-        f"?head={owner}:{branch}&state=open&per_page=1"
-    )
+    head = urllib.parse.quote(f"{owner}:{branch}", safe="")
+    url = f"{api_url}/repos/{owner}/{repo}/pulls?head={head}&state=open&per_page=1"
     try:
         prs = _github_request("GET", url, token, ca_bundle=ca_bundle)
         if prs:
@@ -83,17 +80,23 @@ def find_installation_id(
     owner: str,
     ca_bundle: str | None,
 ) -> int | None:
-    """Find the App installation ID for *owner* (org or user)."""
-    try:
-        installations = _github_request(
-            "GET", f"{api_url}/app/installations", jwt, ca_bundle=ca_bundle,
-        )
-    except GitHubAPIError as exc:
-        print(f"ERROR: Failed to list installations: {exc}", file=sys.stderr)
-        return None
-    for inst in installations:
-        if inst.get("account", {}).get("login", "").lower() == owner.lower():
-            return inst["id"]
+    """Find the App installation ID for *owner* (org or user).
+
+    Uses the dedicated /orgs/{owner}/installation and /users/{owner}/installation
+    endpoints instead of listing all installations (avoids pagination issues).
+    """
+    for kind in ("orgs", "users"):
+        try:
+            inst = _github_request(
+                "GET",
+                f"{api_url}/{kind}/{owner}/installation",
+                jwt,
+                ca_bundle=ca_bundle,
+            )
+            if inst and inst.get("id") is not None:
+                return inst["id"]
+        except GitHubAPIError:
+            continue
     return None
 
 
@@ -167,7 +170,7 @@ def update_placeholder_error(
         body = (
             "<h2>\u274c HawkEye Reviewer \u2014 review failed</h2>\n\n"
             f"{message}\n\n"
-            "Comment `@hawkeye review` to retry."
+            "Push a new commit or re-run the CircleCI workflow to retry."
         )
         _github_request(
             "PATCH",
@@ -201,14 +204,15 @@ def main() -> None:
     print(f"[HawkEye] Repo: {owner}/{repo}  Branch: {branch}  SHA: {sha[:8]}")
 
     # -- GHES config -----------------------------------------------------------
-    api_url = os.environ.get("GITHUB_API_URL", "https://git.corp.adobe.com/api/v3")
+    api_url = os.environ.get("GITHUB_API_URL", "")
     app_id = os.environ.get("GHES_APP_ID", "")
     private_key = os.environ.get("GHES_APP_PRIVATE_KEY", "")
     app_slug = os.environ.get("GHES_APP_SLUG", "")
     ca_bundle = os.environ.get("GHES_SSL_CA_BUNDLE")
 
-    if not app_id or not private_key:
-        print("ERROR: GHES_APP_ID and GHES_APP_PRIVATE_KEY must be set",
+    if not api_url or not app_id or not private_key:
+        print("ERROR: GITHUB_API_URL, GHES_APP_ID, and GHES_APP_PRIVATE_KEY "
+              "must be set (typically via the hawkeye-ghes CircleCI context)",
               file=sys.stderr)
         sys.exit(1)
 
@@ -255,9 +259,11 @@ def main() -> None:
     )
     if not claude_url or not claude_token:
         msg = (
-            "No Claude API credentials found for this repo. Set "
-            "`HAWKEYE_CLAUDE_API_URL` and `HAWKEYE_CLAUDE_BLOB` in your "
-            "CircleCI project environment variables."
+            "No Claude API credentials found for this repo. Configure either "
+            "plaintext CircleCI project env vars "
+            "`CLAUDE_API_URL` + `CLAUDE_API_TOKEN`, or encrypted credentials "
+            "via `HAWKEYE_CLAUDE_API_URL` + `HAWKEYE_CLAUDE_BLOB` "
+            "(requires `SERVER_PRIVATE_KEY` in the CircleCI context)."
         )
         print(f"ERROR: {msg}", file=sys.stderr)
         update_placeholder_error(

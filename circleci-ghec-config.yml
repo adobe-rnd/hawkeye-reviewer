@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   1. The HawkEye GHEC GitHub App is installed on your org.
-#   2. Your repo is set up as a project in CircleCI GHEC (app.circleci.com).
+#   2. Your repo is set up as a project in CircleCI GHEC (app.cci-ghec.ci.adobe.com).
 #   3. A shared CircleCI context "hawkeye-ghec" exists with the App credentials
 #      and a GHEC_PAT for cloning the hawkeye-reviewer repo
 #      (set up by the HawkEye admin — you don't need to configure this).

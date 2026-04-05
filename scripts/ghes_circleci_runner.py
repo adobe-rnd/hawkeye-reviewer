@@ -255,7 +255,7 @@ def main() -> None:
     placeholder_id = 0
     try:
         placeholder_id = post_placeholder_comment(
-            api_url, token, owner, repo, pr_number, ca_bundle,
+            api_url, token, owner, repo, pr_number, ca_bundle, app_slug,
         )
     except Exception as exc:
         print(f"WARNING: Could not post placeholder comment: {exc}", file=sys.stderr)
@@ -288,6 +288,9 @@ def main() -> None:
     print(f"[HawkEye] Starting review for {owner}/{repo}#{pr_number}")
     script_path = os.path.join(os.path.dirname(__file__), "hawkeye_pr_review.py")
 
+    github_base = api_url.replace("/api/v3", "").replace("api.", "")
+    avatar_url = f"{github_base}/apps/{app_slug}/avatar" if app_slug else ""
+
     env = {
         **os.environ,
         "GITHUB_TOKEN": token,
@@ -296,6 +299,8 @@ def main() -> None:
         "CLAUDE_API_TOKEN": claude_token,
         "PLACEHOLDER_COMMENT_ID": str(placeholder_id),
     }
+    if avatar_url:
+        env["BOT_AVATAR_URL"] = avatar_url
     ca_path = _ca_bundle_path(ca_bundle)
     if ca_path:
         env["SSL_CERT_FILE"] = ca_path

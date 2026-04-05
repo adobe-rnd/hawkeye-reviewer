@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "7b1cee386924117f1bd8ef3211aabae57eb9253f",
+  "author": "miculuis1@gmail.com",
+  "timestamp": "2026-04-05T21:39:56+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 1,
+    "total_deletions": 0,
+    "ai_additions": 1,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "circleci-ghec-config.yml": {
+      "ai_additions": 1,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "7",
+      "human_lines": ""
+    }
+  }
+}

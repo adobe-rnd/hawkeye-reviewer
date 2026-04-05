@@ -1,17 +1,12 @@
-# HawkEye Reviewer — CircleCI config for GHES repos
+# HawkEye Reviewer — CircleCI config for GHEC managed-account repos
 #
-# Copy this file to .circleci/config.yml in your GHES repo.
+# Copy this file to .circleci/config.yml in your GHEC repo.
 #
 # Prerequisites:
-#   1. The HawkEye GitHub App is installed on your GHES org.
-#   2. Your repo is set up as a project in CircleCI GHES
-#      (app.circle.ci.adobe.com).
-#   3. A shared CircleCI context "hawkeye-ghes" exists with the App credentials
+#   1. The HawkEye GHEC GitHub App is installed on your org.
+#   2. Your repo is set up as a project in CircleCI GHEC (app.circleci.com).
+#   3. A shared CircleCI context "hawkeye-ghec" exists with the App credentials
 #      (set up by the HawkEye admin — you don't need to configure this).
-#      Context vars: HAWKEYE_APP_ID, HAWKEYE_APP_PRIVATE_KEY,
-#      HAWKEYE_GITHUB_API_URL, HAWKEYE_APP_SLUG, HAWKEYE_SSL_CA_BUNDLE,
-#      SERVER_PRIVATE_KEY, GHEC_PAT.
-#      (Legacy GHES_* names are also accepted.)
 #   4. Set Claude credentials as CircleCI *project* environment variables:
 #      Option A — encrypted (recommended):
 #        HAWKEYE_CLAUDE_API_URL   Your Bedrock endpoint URL
@@ -20,6 +15,8 @@
 #      Option B — plaintext:
 #        CLAUDE_API_URL           Your Bedrock endpoint URL
 #        CLAUDE_API_TOKEN         Plaintext API token
+#
+# Note: HAWKEYE_GITHUB_API_URL is not needed — it defaults to api.github.com.
 #
 # Recommended: enable "Auto-cancel redundant workflows" in your CircleCI
 # project settings (Advanced) to avoid duplicate reviews on rapid pushes.
@@ -46,7 +43,7 @@ workflows:
   review:
     jobs:
       - hawkeye-review:
-          context: hawkeye-ghes
+          context: hawkeye-ghec
           filters:
             branches:
               ignore:

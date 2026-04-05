@@ -82,9 +82,10 @@ def find_installation_id(
 ) -> int | None:
     """Find the App installation ID for *owner* (org or user).
 
-    Uses the dedicated /orgs/{owner}/installation and /users/{owner}/installation
-    endpoints instead of listing all installations (avoids pagination issues).
+    Tries the dedicated /orgs and /users endpoints first (no pagination),
+    then falls back to listing all installations (for GHES compatibility).
     """
+    # Fast path: dedicated endpoints (not always available on GHES)
     for kind in ("orgs", "users"):
         try:
             inst = _github_request(
@@ -97,6 +98,18 @@ def find_installation_id(
                 return inst["id"]
         except GitHubAPIError:
             continue
+
+    # Fallback: list all installations and match by account login
+    try:
+        installations = _github_request(
+            "GET", f"{api_url}/app/installations", jwt, ca_bundle=ca_bundle,
+        )
+        for inst in installations:
+            if inst.get("account", {}).get("login", "").lower() == owner.lower():
+                return inst["id"]
+    except GitHubAPIError as exc:
+        print(f"WARNING: Failed to list installations: {exc}", file=sys.stderr)
+
     return None
 
 

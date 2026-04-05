@@ -464,16 +464,10 @@ def post_placeholder_comment(
     repo: str,
     pr_number: int,
     ca_bundle: str | None,
-    app_slug: str = "",
 ) -> int:
     """Post a 'Reviewing…' placeholder comment and return its ID."""
     url = f"{github_api_url}/repos/{owner}/{repo}/issues/{pr_number}/comments"
-    github_base = github_api_url.replace("/api/v3", "").replace("api.", "")
-    avatar = (
-        f"{github_base}/apps/{app_slug}/avatar"
-        if app_slug
-        else f"{github_base}/anthropics.png?size=36"
-    )
+    avatar = "https://raw.githubusercontent.com/adobe-rnd/hawkeye-reviewer/main/assets/avatar.png"
     body = (
         f'<h2><img src="{avatar}" width="18" height="18" align="absmiddle"> '
         f"Reviewing your PR...</h2>\n\n"
@@ -840,10 +834,6 @@ def _invoke_review_inner(
                 error(f"Failed to update placeholder with credentials error: {patch_exc}", env=env_name, repo=repo_ctx)
         return
 
-    github_base = env_cfg["github_api_url"].replace("/api/v3", "").replace("api.", "")
-    bot_slug = env_cfg.get("github_app_slug") or env_cfg.get("bot_login", "").replace("[bot]", "")
-    avatar_url = f"{github_base}/apps/{bot_slug}/avatar" if bot_slug else ""
-
     env = {
         **os.environ,
         "GITHUB_TOKEN": installation_token,
@@ -852,8 +842,6 @@ def _invoke_review_inner(
         "CLAUDE_API_TOKEN": api_token,
         "PLACEHOLDER_COMMENT_ID": str(placeholder_id),
     }
-    if avatar_url:
-        env["BOT_AVATAR_URL"] = avatar_url
     ca_path = _ca_bundle_path(env_cfg.get("ssl_ca_bundle"))
     if ca_path:
         env["SSL_CERT_FILE"] = ca_path
@@ -970,7 +958,7 @@ def _handle_pull_request(
         token = get_cached_installation_token(env_name, env_cfg, installation_id)
         placeholder_id = post_placeholder_comment(
             env_cfg["github_api_url"], token, owner, repo, pr_number,
-            env_cfg.get("ssl_ca_bundle"), env_cfg.get("github_app_slug", ""),
+            env_cfg.get("ssl_ca_bundle"),
         )
         invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
         return

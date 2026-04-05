@@ -20,7 +20,10 @@ from typing import Any
 
 GITHUB_API = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 _github_base = GITHUB_API.replace("/api/v3", "").replace("api.", "")
-BOT_AVATAR = os.environ.get("BOT_AVATAR_URL", f"{_github_base}/anthropics.png?size=36")
+BOT_AVATAR = os.environ.get(
+    "BOT_AVATAR_URL",
+    "https://raw.githubusercontent.com/adobe-rnd/hawkeye-reviewer/main/assets/avatar.png",
+)
 
 STATUS_CONTEXT = "HawkEye Review"
 

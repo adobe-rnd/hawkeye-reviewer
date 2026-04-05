@@ -1,0 +1,45 @@
+# HawkEye Reviewer — CircleCI config for GHES repos
+#
+# Copy this file to .circleci/config.yml in your GHES repo.
+#
+# Prerequisites:
+#   1. The HawkEye GitHub App is installed on your GHES org.
+#   2. Your repo is set up as a project in CircleCI GHES.
+#   3. A shared CircleCI context "hawkeye-ghes" exists with the App credentials
+#      (set up by the HawkEye admin — you don't need to configure this).
+#   4. Set these CircleCI *project* environment variables for your repo:
+#        HAWKEYE_CLAUDE_API_URL   Your Bedrock endpoint URL
+#        HAWKEYE_CLAUDE_BLOB      Encrypted token (from encrypt_token.py)
+#
+# Recommended: enable "Auto-cancel redundant workflows" in your CircleCI
+# project settings (Advanced) to avoid duplicate reviews on rapid pushes.
+
+version: 2.1
+
+jobs:
+  hawkeye-review:
+    docker:
+      - image: python:3.11-slim
+    steps:
+      - run:
+          name: Install dependencies
+          command: apt-get update -qq && apt-get install -yqq git openssl > /dev/null
+      - run:
+          name: Download HawkEye
+          command: git clone --depth 1 https://github.com/adobe-rnd/hawkeye-reviewer.git /hawkeye
+      - run:
+          name: Run review
+          command: python3 /hawkeye/scripts/ghes_circleci_runner.py
+          no_output_timeout: 20m
+
+workflows:
+  review:
+    jobs:
+      - hawkeye-review:
+          context: hawkeye-ghes
+          filters:
+            branches:
+              ignore:
+                - main
+                - master
+                - develop

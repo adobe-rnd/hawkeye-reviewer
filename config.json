@@ -5,7 +5,8 @@
       "github_app_id": "${GITHUB_APP_ID}",
       "github_app_private_key": "${GITHUB_APP_PRIVATE_KEY}",
       "webhook_secret": "${WEBHOOK_SECRET}",
-      "github_app_slug": "${GITHUB_APP_SLUG}"
+      "github_app_slug": "${GITHUB_APP_SLUG}",
+      "allowed_orgs": ["adobe-rnd"]
     },
     "ghes": {
       "github_api_url": "https://git.corp.adobe.com/api/v3",

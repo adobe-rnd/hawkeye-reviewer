@@ -915,6 +915,12 @@ def dispatch_event(
     repo_ctx = f"{owner}/{repo_name}"
     installation_id = payload.get("installation", {}).get("id")
 
+    allowed_orgs = env_cfg.get("allowed_orgs")
+    if allowed_orgs and owner.lower() not in [o.lower() for o in allowed_orgs]:
+        info(f"Ignoring event from '{owner}' — not in allowed_orgs for {env_name}",
+             env=env_name, repo=repo_ctx)
+        return
+
     try:
         if event_type == "pull_request":
             _handle_pull_request(env_name, env_cfg, script_path, payload,

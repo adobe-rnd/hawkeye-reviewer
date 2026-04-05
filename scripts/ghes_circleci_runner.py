@@ -219,7 +219,7 @@ def main() -> None:
     # -- GHES config -----------------------------------------------------------
     api_url = os.environ.get("GITHUB_API_URL", "")
     app_id = os.environ.get("GHES_APP_ID", "")
-    private_key = os.environ.get("GHES_APP_PRIVATE_KEY", "")
+    private_key = os.environ.get("GHES_APP_PRIVATE_KEY", "").replace("\\n", "\n")
     app_slug = os.environ.get("GHES_APP_SLUG", "")
     ca_bundle = os.environ.get("GHES_SSL_CA_BUNDLE")
 

@@ -469,8 +469,7 @@ def post_placeholder_comment(
     url = f"{github_api_url}/repos/{owner}/{repo}/issues/{pr_number}/comments"
     avatar = "https://raw.githubusercontent.com/adobe-rnd/hawkeye-reviewer/main/assets/avatar.png"
     body = (
-        f'<h2><img src="{avatar}" width="18" height="18" align="absmiddle"> '
-        f"Reviewing your PR...</h2>\n\n"
+        f'## <img src="{avatar}" width="18" height="18" align="absmiddle"> Reviewing your PR...\n\n'
         f"\u23f3 Claude is analyzing your changes. "
         f"A detailed review with inline comments will appear here shortly."
     )

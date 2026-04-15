@@ -1990,7 +1990,7 @@ def format_summary_comment(
 
     logo = f'<img src="{BOT_AVATAR}" width="18" height="18" align="absmiddle">'
 
-    header = f"<h2>{logo} Pull request overview</h2>"
+    header = f"## {logo} Pull request overview"
     overview = summary.get("overview", "")
     if overview:
         parts.append(f"{header}\n\n{overview}")
@@ -2998,7 +2998,7 @@ class _ProgressTracker:
             files_detail += f" ({files_skipped} skipped from failed batches)"
 
         return (
-            f"<h2>{logo} HawkEye Review in progress...</h2>\n\n"
+            f"## {logo} HawkEye Review in progress...\n\n"
             f"Using <b>map-reduce</b> strategy — PR is too large for a single pass.\n\n"
             f"<table>\n"
             f"<tr><td><b>Progress</b></td><td><code>{bar}</code> {self._completed_batches}/{self._total_batches} batches ({pct}%)</td></tr>\n"
@@ -3453,7 +3453,7 @@ def main() -> None:
             if not response:
                 print("  Could not parse Claude response; posting raw text as summary.", file=sys.stderr)
                 fallback_body = (
-                    f"<h2>{logo} HawkEye Review</h2>\n\n"
+                    f"## {logo} HawkEye Review\n\n"
                     "Claude returned a response that could not be parsed as structured JSON.\n\n"
                     f"<details><summary>Raw response</summary>\n\n```\n{claude_text[:4000]}\n```\n</details>\n\n"
                     f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
@@ -3538,7 +3538,7 @@ def main() -> None:
     except ClaudeAPIError as exc:
         print(f"  Claude API error: {exc}", file=sys.stderr)
         error_body = (
-            f"<h2>{logo} HawkEye Review</h2>\n\n"
+            f"## {logo} HawkEye Review\n\n"
             f"\u274c **Claude API error:** {exc}\n\n"
             "Comment `@hawkeye review` to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"
@@ -3557,7 +3557,7 @@ def main() -> None:
     except Exception as exc:
         print(f"  Review failed: {exc}", file=sys.stderr)
         error_body = (
-            f"<h2>{logo} HawkEye Review</h2>\n\n"
+            f"## {logo} HawkEye Review\n\n"
             f"\u274c Review failed: `{type(exc).__name__}: {exc}`\n\n"
             "This may be a transient issue. Comment `@hawkeye review` to retry.\n\n"
             f"<sub>{footer_logo} Reviewed by **{model_name}** (Anthropic) via Amazon Bedrock | v{VERSION}</sub>\n\n"

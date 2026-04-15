@@ -337,15 +337,31 @@ REPO_CONTEXT_MAX_PER_FILE = 2048
 REPO_CONTEXT_MAX_TOTAL = 12_000
 
 REPO_DOCS_FILES = [
+    # Root-level conventions
     "README.md",
     "CONTRIBUTING.md",
     "ARCHITECTURE.md",
     "CLAUDE.md",
+    # Editor / AI rules
     ".cursorrules",
     ".cursor/rules/review.md",
     ".cursor/rules/code-style.md",
+    # GitHub meta
     ".github/CODEOWNERS",
     ".github/pull_request_template.md",
+    # docs/ directory — V2 layout equivalents for the above
+    "docs/architecture.md",
+    "docs/ARCHITECTURE.md",
+    "docs/api.md",
+    "docs/API.md",
+    # .specify/ convention — AI-agent-driven projects store their constitution,
+    # architectural patterns, and anti-patterns here. Critical review context:
+    # the constitution defines what is architecturally forbidden (e.g. in-memory
+    # state, retry loops, semaphores) and the anti-patterns doc lists explicit
+    # code-level red flags with examples of wrong vs correct code.
+    ".specify/memory/constitution.md",
+    ".specify/memory/patterns/README.md",
+    ".specify/memory/patterns/anti-patterns.md",
 ]
 
 REPO_DOCS_MAX_PER_FILE = 3000
@@ -543,6 +559,149 @@ def get_repo_docs(owner: str, repo: str, ref: str, token: str, tree_paths: set[s
         total_chars += len(block)
         print(f"  repo docs: included {path} ({len(content)} chars)", file=sys.stderr)
 
+    return "\n\n".join(blocks)
+
+
+STALE_DOCS_MAX_PER_FILE = 2000
+STALE_DOCS_MAX_TOTAL = 10_000
+STALE_DOCS_MAX_FILES = 6
+
+# Markdown extensions recognised as documentation
+_MD_EXTENSIONS = {".md", ".mdx", ".rst"}
+
+# Paths already covered by REPO_DOCS_FILES — skip them in the dynamic scan
+_KNOWN_DOCS_SET = frozenset(REPO_DOCS_FILES)
+
+_SYMBOL_LINE_RE = re.compile(
+    r"^\+\s*(?:(?:export|default|public|private|protected|static|abstract|async|"
+    r"override|final|sealed|pub|unsafe)\s+)*"
+    r"(?:def|function\*?|class|interface|type|enum|struct|trait|impl|fn|func|module)"
+    r"\s+(\w+)"
+)
+
+_DOC_SKIP_NAMES = frozenset({
+    "index", "mod", "lib", "main", "init", "__init__",
+    "utils", "helpers", "common", "types", "constants",
+})
+
+_DOC_GENERIC_DIRS = frozenset({
+    "src", "lib", "pkg", "app", "api",
+    "test", "tests", "spec", "specs", "scripts",
+})
+
+
+def _extract_doc_search_terms(changed_files: list[dict]) -> set[str]:
+    """Return a set of identifiers to look for in documentation.
+
+    Includes: basenames (no extension), non-trivial directory components,
+    and top-level symbol names extracted from diff hunks.
+    """
+    terms: set[str] = set()
+
+    for f in changed_files:
+        path = f.get("filename", "")
+        if not path:
+            continue
+
+        # Basename without extension
+        base = os.path.splitext(os.path.basename(path))[0]
+        if base and base not in _DOC_SKIP_NAMES:
+            terms.add(base)
+            # Also add hyphen/underscore variants so "token-validator" matches "token_validator"
+            terms.add(base.replace("_", "-"))
+            terms.add(base.replace("-", "_"))
+
+        # Non-trivial directory components
+        for part in path.split("/")[:-1]:
+            if len(part) > 2 and part not in _DOC_GENERIC_DIRS and not part.startswith("."):
+                terms.add(part)
+
+        # Top-level symbols from the diff
+        for line in (f.get("patch") or "").splitlines():
+            m = _SYMBOL_LINE_RE.match(line)
+            if m:
+                sym = m.group(1)
+                if len(sym) > 3 and sym not in _DOC_SKIP_NAMES:
+                    terms.add(sym)
+
+    return terms
+
+
+def _doc_mentions_terms(content: str, terms: set[str]) -> bool:
+    """Return True if *content* contains at least one term (case-insensitive).
+
+    Uses substring matching intentionally — permissive by design so that
+    relevant docs are not filtered out. False positives (a doc shown that
+    turns out to be unrelated) are cheaper than false negatives (a stale
+    doc never reaching Claude).
+    """
+    content_lower = content.lower()
+    for term in terms:
+        if term.lower() in content_lower:
+            return True
+    return False
+
+
+def get_stale_doc_candidates(
+    changed_files: list[dict],
+    tree_paths: set[str],
+    owner: str,
+    repo: str,
+    ref: str,
+    token: str,
+    fetched_paths: set[str] | None = None,
+) -> str:
+    """Find documentation files that may reference the changed code and return them as context.
+
+    Scans all *.md / *.mdx / *.rst files in the repo tree (excluding those
+    already included via REPO_DOCS_FILES) and returns only the ones that
+    mention identifiers extracted from the changed files.
+    """
+    terms = _extract_doc_search_terms(changed_files)
+    if not terms:
+        return ""
+
+    # Collect candidate doc paths from the full tree
+    candidate_paths = [
+        p for p in sorted(tree_paths)
+        if os.path.splitext(p)[1].lower() in _MD_EXTENSIONS
+        and p not in _KNOWN_DOCS_SET
+        and (fetched_paths is None or p not in fetched_paths)
+    ]
+
+    if not candidate_paths:
+        return ""
+
+    blocks: list[str] = []
+    total_chars = 0
+
+    for path in candidate_paths:
+        if len(blocks) >= STALE_DOCS_MAX_FILES:
+            break
+
+        content = get_file_content(owner, repo, ref, path, token)
+        if not content:
+            continue
+
+        if not _doc_mentions_terms(content, terms):
+            continue
+
+        if fetched_paths is not None:
+            fetched_paths.add(path)
+
+        truncated = content[:STALE_DOCS_MAX_PER_FILE]
+        if len(content) > STALE_DOCS_MAX_PER_FILE:
+            truncated += "\n... (truncated)"
+
+        block = f"### {path}\n_May reference changed code — flag if outdated_\n```\n{truncated}\n```"
+        if total_chars + len(block) > STALE_DOCS_MAX_TOTAL:
+            break
+
+        blocks.append(block)
+        total_chars += len(block)
+
+    if blocks:
+        print(f"  stale doc candidates: {len(blocks)} file(s) matched, {total_chars} chars", file=sys.stderr)
     return "\n\n".join(blocks)
 
 
@@ -1438,6 +1597,11 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - If related context files (tests, configs) are provided below, use them to
       catch issues like broken test mocks, incompatible build settings, or
       mismatched API contracts.
+    - If potentially stale documentation files are provided, check whether the
+      changes make any of their content incorrect or incomplete. For each doc
+      file whose content is now outdated, add a comment with the doc file as
+      the path, line 1, severity "suggestion", and a clear message describing
+      what section or statement needs to be updated and why.
     - Only return an empty "comments" array after you have carefully examined
       every changed file and genuinely found nothing actionable.
 
@@ -1544,6 +1708,17 @@ REVIEW_PROMPT = textwrap.dedent("""\
     - Logging or debug statements (console.log, print, System.out) that appear
       to be leftover from development rather than intentional observability
 
+    ### Documentation staleness
+    - README sections that describe behaviour, CLI flags, env vars, config
+      keys, endpoints, or module names that were changed by this PR
+    - Architecture or design docs that reference class names, interfaces, or
+      data flows that have been renamed, restructured, or removed
+    - CONTRIBUTING / DEVELOPMENT guides whose setup steps, commands, or
+      environment variables are now incorrect
+    - CHANGELOG / MIGRATION entries that are missing for user-visible changes
+    - API reference docs whose request/response shapes or status codes no
+      longer match the updated code
+
     {sibling_section}
 
     {import_section}
@@ -1551,6 +1726,8 @@ REVIEW_PROMPT = textwrap.dedent("""\
     {related_context_section}
 
     {description_files_section}
+
+    {stale_docs_section}
 
     ## Changed files
 
@@ -1841,6 +2018,18 @@ def build_prompt(
         f"{desc_files_context}"
     ) if desc_files_context else ""
 
+    stale_docs_context = ""
+    if tree_paths:
+        stale_docs_context = get_stale_doc_candidates(
+            files, tree_paths, owner, repo, head_sha, token, fetched_paths,
+        )
+    stale_docs_section = (
+        "## Potentially stale documentation\n\n"
+        "The following documentation files reference identifiers or paths from the "
+        "changed code. Check whether their content is still accurate after this PR.\n\n"
+        f"{stale_docs_context}"
+    ) if stale_docs_context else ""
+
     return REVIEW_PROMPT.format(
         title=pr_info.get("title", ""),
         description=(pr_info.get("body") or "(no description)")[:2000],
@@ -1853,6 +2042,7 @@ def build_prompt(
         import_section=import_section,
         related_context_section=related_context_section,
         description_files_section=description_files_section,
+        stale_docs_section=stale_docs_section,
         files_text=files_text,
     )
 
@@ -2402,6 +2592,11 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     - Be thorough and critical. It is better to surface a potential concern that
       turns out to be fine than to miss a real bug, security hole, or broken
       contract.
+    - If potentially stale documentation files are provided, check whether the
+      changes make any of their content incorrect or incomplete. For each doc
+      file whose content is now outdated, add a comment with the doc file as
+      the path, line 1, severity "suggestion", and a clear message describing
+      what section or statement needs to be updated and why.
     - Only return an empty "comments" array after you have carefully examined
       every file in your batch and genuinely found nothing actionable.
 
@@ -2492,6 +2687,17 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     - Logging or debug statements that appear to be leftover from development
       rather than intentional observability
 
+    ### Documentation staleness
+    - README sections that describe behaviour, CLI flags, env vars, config
+      keys, endpoints, or module names that were changed by this PR
+    - Architecture or design docs that reference class names, interfaces, or
+      data flows that have been renamed, restructured, or removed
+    - CONTRIBUTING / DEVELOPMENT guides whose setup steps, commands, or
+      environment variables are now incorrect
+    - CHANGELOG / MIGRATION entries that are missing for user-visible changes
+    - API reference docs whose request/response shapes or status codes no
+      longer match the updated code
+
     {sibling_section}
 
     {import_section}
@@ -2499,6 +2705,8 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
     {related_context_section}
 
     {description_files_section}
+
+    {stale_docs_section}
 
     ## Files to review
 
@@ -2834,6 +3042,7 @@ def build_batch_prompt(
         import_section=import_section,
         related_context_section=related_context_section,
         description_files_section=shared_context.get("description_files_section", ""),
+        stale_docs_section=shared_context.get("stale_docs_section", ""),
         files_text=files_text,
     )
     return prompt, coverage
@@ -3109,6 +3318,18 @@ def _review_map_reduce_inner(
         "Use them to understand the context and verify the changes are correct and complete.\n\n"
         f"{desc_files_context}"
     ) if desc_files_context else ""
+
+    stale_docs_context = ""
+    if tree_paths:
+        stale_docs_context = get_stale_doc_candidates(
+            files, tree_paths, owner, repo, head_sha, github_token,
+        )
+    shared_context["stale_docs_section"] = (
+        "## Potentially stale documentation\n\n"
+        "The following documentation files reference identifiers or paths from the "
+        "changed code. Check whether their content is still accurate after this PR.\n\n"
+        f"{stale_docs_context}"
+    ) if stale_docs_context else ""
 
     if batches is None:
         batches = group_files_into_batches(files)

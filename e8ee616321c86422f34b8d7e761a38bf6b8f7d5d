@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "e8ee616321c86422f34b8d7e761a38bf6b8f7d5d",
+  "author": "aenascut@adobe.com",
+  "timestamp": "2026-04-16T11:17:57+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 127,
+    "total_deletions": 0,
+    "ai_additions": 127,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/hawkeye_pr_review.py": {
+      "ai_additions": 127,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1-127",
+      "human_lines": ""
+    }
+  }
+}

@@ -565,6 +565,7 @@ def get_repo_docs(owner: str, repo: str, ref: str, token: str, tree_paths: set[s
 STALE_DOCS_MAX_PER_FILE = 2000
 STALE_DOCS_MAX_TOTAL = 10_000
 STALE_DOCS_MAX_FILES = 6
+STALE_DOC_MIN_RELEVANCE = 0.25
 
 # Markdown extensions recognised as documentation
 _MD_EXTENSIONS = {".md", ".mdx", ".rst"}
@@ -572,8 +573,10 @@ _MD_EXTENSIONS = {".md", ".mdx", ".rst"}
 # Paths already covered by REPO_DOCS_FILES — skip them in the dynamic scan
 _KNOWN_DOCS_SET = frozenset(REPO_DOCS_FILES)
 
+# Matches symbol definitions on both added (+) and removed (-) lines so that
+# renamed or deleted symbols are captured as staleness signals.
 _SYMBOL_LINE_RE = re.compile(
-    r"^\+\s*(?:(?:export|default|public|private|protected|static|abstract|async|"
+    r"^[+-]\s*(?:(?:export|default|public|private|protected|static|abstract|async|"
     r"override|final|sealed|pub|unsafe)\s+)*"
     r"(?:def|function\*?|class|interface|type|enum|struct|trait|impl|fn|func|module)"
     r"\s+(\w+)"
@@ -582,6 +585,7 @@ _SYMBOL_LINE_RE = re.compile(
 _DOC_SKIP_NAMES = frozenset({
     "index", "mod", "lib", "main", "init", "__init__",
     "utils", "helpers", "common", "types", "constants",
+    "license", "changelog", "history",
 })
 
 _DOC_GENERIC_DIRS = frozenset({
@@ -589,12 +593,54 @@ _DOC_GENERIC_DIRS = frozenset({
     "test", "tests", "spec", "specs", "scripts",
 })
 
+# Tier 3: directories to content-scan when path scoring finds nothing (bounded)
+_DOC_SCAN_PREFIXES = ("docs/", "doc/", "")   # "" = repo root files
+_DOC_SCAN_MAX_FETCH = 15
 
-def _extract_doc_search_terms(changed_files: list[dict]) -> set[str]:
-    """Return a set of identifiers to look for in documentation.
 
-    Includes: basenames (no extension), non-trivial directory components,
-    and top-level symbol names extracted from diff hunks.
+def _doc_relevance(
+    doc_path: str,
+    changed_words: list[set[str]],
+    changed_dirs: set[str],
+) -> float:
+    """Score a doc file's relevance to the changed files by path similarity.
+
+    Uses the same Jaccard approach as _sibling_relevance, with a directory
+    overlap boost when the doc lives alongside a changed file.
+    """
+    base = os.path.splitext(os.path.basename(doc_path))[0].lower()
+    if base in _DOC_SKIP_NAMES:
+        return 0.0
+
+    doc_words = set(re.split(r"[_\-.]", base)) - {""}
+    doc_dir = os.path.dirname(doc_path)
+    dir_boost = 0.3 if doc_dir in changed_dirs else 0.0
+
+    dir_parts = {
+        p.lower() for p in doc_path.split("/")[:-1]
+        if len(p) > 2 and p not in _DOC_GENERIC_DIRS and not p.startswith(".")
+    }
+    all_doc_words = doc_words | dir_parts
+
+    if not all_doc_words:
+        return dir_boost
+
+    best = 0.0
+    for cw in changed_words:
+        if not cw:
+            continue
+        intersection = all_doc_words & cw
+        union = all_doc_words | cw
+        best = max(best, len(intersection) / len(union))
+
+    return best + dir_boost
+
+
+def _extract_changed_identifiers(changed_files: list[dict]) -> set[str]:
+    """Extract basenames and symbol names from changed files for content matching.
+
+    Scans both added (+) and deleted (-) lines so renamed or removed symbols
+    are included as staleness signals.
     """
     terms: set[str] = set()
 
@@ -603,20 +649,12 @@ def _extract_doc_search_terms(changed_files: list[dict]) -> set[str]:
         if not path:
             continue
 
-        # Basename without extension
         base = os.path.splitext(os.path.basename(path))[0]
         if base and base not in _DOC_SKIP_NAMES:
             terms.add(base)
-            # Also add hyphen/underscore variants so "token-validator" matches "token_validator"
             terms.add(base.replace("_", "-"))
             terms.add(base.replace("-", "_"))
 
-        # Non-trivial directory components
-        for part in path.split("/")[:-1]:
-            if len(part) > 2 and part not in _DOC_GENERIC_DIRS and not part.startswith("."):
-                terms.add(part)
-
-        # Top-level symbols from the diff
         for line in (f.get("patch") or "").splitlines():
             m = _SYMBOL_LINE_RE.match(line)
             if m:
@@ -625,21 +663,6 @@ def _extract_doc_search_terms(changed_files: list[dict]) -> set[str]:
                     terms.add(sym)
 
     return terms
-
-
-def _doc_mentions_terms(content: str, terms: set[str]) -> bool:
-    """Return True if *content* contains at least one term (case-insensitive).
-
-    Uses substring matching intentionally — permissive by design so that
-    relevant docs are not filtered out. False positives (a doc shown that
-    turns out to be unrelated) are cheaper than false negatives (a stale
-    doc never reaching Claude).
-    """
-    content_lower = content.lower()
-    for term in terms:
-        if term.lower() in content_lower:
-            return True
-    return False
 
 
 def get_stale_doc_candidates(
@@ -651,54 +674,105 @@ def get_stale_doc_candidates(
     token: str,
     fetched_paths: set[str] | None = None,
 ) -> str:
-    """Find documentation files that may reference the changed code and return them as context.
+    """Find documentation files likely affected by the changed code.
 
-    Scans all *.md / *.mdx / *.rst files in the repo tree (excluding those
-    already included via REPO_DOCS_FILES) and returns only the ones that
-    mention identifiers extracted from the changed files.
+    Three-tier approach to minimise GitHub API calls:
+    - Tier 1+2: Score all doc paths by name/directory similarity (zero HTTP calls).
+      Docs scoring above STALE_DOC_MIN_RELEVANCE are fetched first.
+    - Tier 3: Bounded content scan (capped at _DOC_SCAN_MAX_FETCH requests) for
+      high-traffic doc directories when path scoring alone finds too few matches.
+    - Tier 4: Claude prompt instruction (handled in REVIEW_PROMPT / BATCH_REVIEW_PROMPT).
     """
-    terms = _extract_doc_search_terms(changed_files)
-    if not terms:
+    changed_set = {f["filename"] for f in changed_files}
+
+    # Build per-file word sets and directory set from changed paths
+    changed_words: list[set[str]] = []
+    changed_dirs: set[str] = set()
+    for f in changed_files:
+        if f.get("status") == "removed":
+            continue
+        path = f["filename"]
+        changed_dirs.add(os.path.dirname(path))
+        base = os.path.splitext(os.path.basename(path))[0].lower()
+        words = set(re.split(r"[_\-.]", base)) - {""}
+        for part in path.split("/")[:-1]:
+            if len(part) > 2 and part not in _DOC_GENERIC_DIRS and not part.startswith("."):
+                words.add(part.lower())
+        changed_words.append(words)
+
+    if not changed_words:
         return ""
 
-    # Collect candidate doc paths from the full tree
-    candidate_paths = [
+    # Collect all doc paths from the tree (excluding known and already-fetched)
+    doc_paths = [
         p for p in sorted(tree_paths)
         if os.path.splitext(p)[1].lower() in _MD_EXTENSIONS
         and p not in _KNOWN_DOCS_SET
+        and p not in changed_set
         and (fetched_paths is None or p not in fetched_paths)
     ]
 
-    if not candidate_paths:
+    if not doc_paths:
         return ""
+
+    # --- Tier 1+2: path-based scoring — zero HTTP calls ---
+    scored: list[tuple[str, float]] = []
+    tier3_candidates: list[str] = []
+
+    for dp in doc_paths:
+        score = _doc_relevance(dp, changed_words, changed_dirs)
+        if score >= STALE_DOC_MIN_RELEVANCE:
+            scored.append((dp, score))
+        elif any(dp.startswith(prefix) for prefix in _DOC_SCAN_PREFIXES):
+            tier3_candidates.append(dp)
+
+    scored.sort(key=lambda x: (-x[1], x[0]))
 
     blocks: list[str] = []
     total_chars = 0
 
-    for path in candidate_paths:
-        if len(blocks) >= STALE_DOCS_MAX_FILES:
+    for path, _ in scored[:STALE_DOCS_MAX_FILES]:
+        if total_chars >= STALE_DOCS_MAX_TOTAL:
             break
-
         content = get_file_content(owner, repo, ref, path, token)
         if not content:
             continue
-
-        if not _doc_mentions_terms(content, terms):
-            continue
-
         if fetched_paths is not None:
             fetched_paths.add(path)
-
-        truncated = content[:STALE_DOCS_MAX_PER_FILE]
-        if len(content) > STALE_DOCS_MAX_PER_FILE:
-            truncated += "\n... (truncated)"
-
+        truncated = _smart_truncate(path, content, STALE_DOCS_MAX_PER_FILE)
         block = f"### {path}\n_May reference changed code — flag if outdated_\n```\n{truncated}\n```"
         if total_chars + len(block) > STALE_DOCS_MAX_TOTAL:
             break
-
         blocks.append(block)
         total_chars += len(block)
+
+    # --- Tier 3: bounded content scan for high-traffic doc directories ---
+    if len(blocks) < STALE_DOCS_MAX_FILES and tier3_candidates:
+        identifiers = _extract_changed_identifiers(changed_files)
+        if identifiers:
+            fetch_count = 0
+            for path in tier3_candidates:
+                if len(blocks) >= STALE_DOCS_MAX_FILES or total_chars >= STALE_DOCS_MAX_TOTAL:
+                    break
+                if fetch_count >= _DOC_SCAN_MAX_FETCH:
+                    break
+                if fetched_paths is not None and path in fetched_paths:
+                    continue
+                content = get_file_content(owner, repo, ref, path, token)
+                fetch_count += 1
+                if not content:
+                    continue
+                content_lower = content.lower()
+                if not any(term.lower() in content_lower for term in identifiers):
+                    continue
+                if fetched_paths is not None:
+                    fetched_paths.add(path)
+                truncated = _smart_truncate(path, content, STALE_DOCS_MAX_PER_FILE)
+                block = f"### {path}\n_May reference changed code — flag if outdated_\n```\n{truncated}\n```"
+                if total_chars + len(block) > STALE_DOCS_MAX_TOTAL:
+                    break
+                blocks.append(block)
+                total_chars += len(block)
 
     if blocks:
         print(f"  stale doc candidates: {len(blocks)} file(s) matched, {total_chars} chars", file=sys.stderr)
@@ -3321,8 +3395,9 @@ def _review_map_reduce_inner(
 
     stale_docs_context = ""
     if tree_paths:
+        stale_fetched: set[str] = set()
         stale_docs_context = get_stale_doc_candidates(
-            files, tree_paths, owner, repo, head_sha, github_token,
+            files, tree_paths, owner, repo, head_sha, github_token, stale_fetched,
         )
     shared_context["stale_docs_section"] = (
         "## Potentially stale documentation\n\n"

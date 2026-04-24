@@ -594,7 +594,7 @@ _DOC_GENERIC_DIRS = frozenset({
 })
 
 # Tier 3: directories to content-scan when path scoring finds nothing (bounded)
-_DOC_SCAN_PREFIXES = ("docs/", "doc/", "")   # "" = repo root files
+_DOC_SCAN_PREFIXES = ("docs/", "doc/")
 _DOC_SCAN_MAX_FETCH = 15
 
 
@@ -618,7 +618,7 @@ def _doc_relevance(
 
     dir_parts = {
         p.lower() for p in doc_path.split("/")[:-1]
-        if len(p) > 2 and p not in _DOC_GENERIC_DIRS and not p.startswith(".")
+        if len(p) > 2 and p.lower() not in _DOC_GENERIC_DIRS and not p.startswith(".")
     }
     all_doc_words = doc_words | dir_parts
 
@@ -696,7 +696,7 @@ def get_stale_doc_candidates(
         base = os.path.splitext(os.path.basename(path))[0].lower()
         words = set(re.split(r"[_\-.]", base)) - {""}
         for part in path.split("/")[:-1]:
-            if len(part) > 2 and part not in _DOC_GENERIC_DIRS and not part.startswith("."):
+            if len(part) > 2 and part.lower() not in _DOC_GENERIC_DIRS and not part.startswith("."):
                 words.add(part.lower())
         changed_words.append(words)
 
@@ -723,7 +723,7 @@ def get_stale_doc_candidates(
         score = _doc_relevance(dp, changed_words, changed_dirs)
         if score >= STALE_DOC_MIN_RELEVANCE:
             scored.append((dp, score))
-        elif any(dp.startswith(prefix) for prefix in _DOC_SCAN_PREFIXES):
+        elif any(dp.startswith(prefix) for prefix in _DOC_SCAN_PREFIXES) or "/" not in dp:
             tier3_candidates.append(dp)
 
     scored.sort(key=lambda x: (-x[1], x[0]))
@@ -1612,6 +1612,9 @@ REVIEW_PROMPT = textwrap.dedent("""\
         "changes": ["bullet 1", "bullet 2"],
         "files": [
           {{"path": "relative/file.py", "description": "What changed in this file"}}
+        ],
+        "stale_docs": [
+          {{"path": "docs/api.md", "message": "What section needs updating and why"}}
         ]
       }},
       "comments": [
@@ -1673,9 +1676,10 @@ REVIEW_PROMPT = textwrap.dedent("""\
       mismatched API contracts.
     - If potentially stale documentation files are provided, check whether the
       changes make any of their content incorrect or incomplete. For each doc
-      file whose content is now outdated, add a comment with the doc file as
-      the path, line 1, severity "suggestion", and a clear message describing
-      what section or statement needs to be updated and why.
+      file whose content is now outdated, add an entry to summary.stale_docs
+      with the doc file path and a clear message describing what section or
+      statement needs to be updated and why. Do not add inline comments for
+      doc files that are not part of the PR diff.
     - Only return an empty "comments" array after you have carefully examined
       every changed file and genuinely found nothing actionable.
 
@@ -2274,6 +2278,13 @@ def format_summary_comment(
         table = "| File | Description |\n|------|-------------|\n" + rows
         parts.append(f"### Reviewed changes\n\n{table}")
 
+    stale_docs = summary.get("stale_docs", [])
+    if stale_docs:
+        bullets = "\n".join(
+            f"- `{sd.get('path', '')}` — {sd.get('message', '')}" for sd in stale_docs
+        )
+        parts.append(f"### Documentation that may need updating\n\n{bullets}")
+
     if comments:
         counts: dict[str, int] = {}
         for c in comments:
@@ -2618,6 +2629,9 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
         "changes": ["bullet 1", "bullet 2"],
         "files": [
           {{"path": "relative/file.py", "description": "What changed in this file"}}
+        ],
+        "stale_docs": [
+          {{"path": "docs/api.md", "message": "What section needs updating and why"}}
         ]
       }},
       "comments": [
@@ -2668,9 +2682,10 @@ BATCH_REVIEW_PROMPT = textwrap.dedent("""\
       contract.
     - If potentially stale documentation files are provided, check whether the
       changes make any of their content incorrect or incomplete. For each doc
-      file whose content is now outdated, add a comment with the doc file as
-      the path, line 1, severity "suggestion", and a clear message describing
-      what section or statement needs to be updated and why.
+      file whose content is now outdated, add an entry to summary.stale_docs
+      with the doc file path and a clear message describing what section or
+      statement needs to be updated and why. Do not add inline comments for
+      doc files that are not part of the PR diff.
     - Only return an empty "comments" array after you have carefully examined
       every file in your batch and genuinely found nothing actionable.
 
@@ -2837,6 +2852,9 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
         "changes": ["bullet 1", "bullet 2"],
         "files": [
           {{"path": "relative/file.py", "description": "What changed in this file"}}
+        ],
+        "stale_docs": [
+          {{"path": "docs/api.md", "message": "What section needs updating and why"}}
         ]
       }},
       "comments": [
@@ -2852,6 +2870,8 @@ REDUCE_REVIEW_PROMPT = textwrap.dedent("""\
     ```
 
     ## Rules
+    - Collect all unique stale_docs entries from the batch summaries and include
+      them in summary.stale_docs, deduplicating by path.
     - Comment on lines that appear in each file's DIFF. Focus on ADDED (+) lines,
       but also allow comments on unchanged context lines within the same hunk when
       the additions make an existing issue newly relevant.
@@ -3146,6 +3166,12 @@ def build_reduce_prompt(
             part += "Files:\n" + "\n".join(
                 f"- `{fd.get('path', '')}`: {fd.get('description', '')}"
                 for fd in files_desc
+            ) + "\n"
+        stale = summary.get("stale_docs", [])
+        if stale:
+            part += "Stale docs:\n" + "\n".join(
+                f"- `{sd.get('path', '')}`: {sd.get('message', '')}"
+                for sd in stale
             ) + "\n"
         comments_json = json.dumps(comments, indent=2)
         if results_chars + len(part) + len(comments_json) > max_results_chars:

@@ -40,6 +40,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from typing import Any
 
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -95,8 +96,7 @@ def _load_single_env_config() -> dict[str, Any]:
     # The private key can be supplied as a file path OR as PEM contents in an
     # env var (GITHUB_APP_PRIVATE_KEY) — either satisfies the requirement.
     has_private_key = bool(
-        os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH") or
-        os.environ.get("GITHUB_APP_PRIVATE_KEY")
+        os.environ.get("GITHUB_APP_PRIVATE_KEY_PATH") or os.environ.get("GITHUB_APP_PRIVATE_KEY")
     )
     if using_pat:
         required: tuple[str, ...] = ("WEBHOOK_SECRET",)
@@ -139,6 +139,7 @@ def _expand_env_vars(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_expand_env_vars(v) for v in obj]
     if isinstance(obj, str):
+
         def replacer(m: re.Match) -> str:
             spec = m.group(1)
             if ":-" in spec:
@@ -152,6 +153,7 @@ def _expand_env_vars(obj: Any) -> Any:
                     f"Environment variable '{var_name}' referenced in config is not set"
                 )
             return value
+
         return re.sub(r"\$\{([^}]+)\}", replacer, obj)
     return obj
 
@@ -395,7 +397,10 @@ def get_installation_token(
         dt = datetime.strptime(expires_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         expires_at = dt.timestamp()
     except (ValueError, TypeError):
-        print(f"WARNING: could not parse token expiry {expires_str!r}, defaulting to 1 hour", file=sys.stderr)
+        print(
+            f"WARNING: could not parse token expiry {expires_str!r}, defaulting to 1 hour",
+            file=sys.stderr,
+        )
         expires_at = time.time() + 3600
     return token, expires_at
 
@@ -445,6 +450,7 @@ def get_cached_installation_token(
 # HMAC signature validation
 # ---------------------------------------------------------------------------
 
+
 def verify_signature(body: bytes, secret: str, sig_header: str) -> bool:
     """Validate X-Hub-Signature-256 header."""
     if not sig_header:
@@ -456,6 +462,7 @@ def verify_signature(body: bytes, secret: str, sig_header: str) -> bool:
 # ---------------------------------------------------------------------------
 # GitHub API helpers (placeholder comment + commit status)
 # ---------------------------------------------------------------------------
+
 
 def post_placeholder_comment(
     github_api_url: str,
@@ -475,7 +482,6 @@ def post_placeholder_comment(
     )
     resp = _github_request("POST", url, token, {"body": body}, ca_bundle=ca_bundle)
     return resp["id"]
-
 
 
 def request_self_as_reviewer(
@@ -498,6 +504,7 @@ def request_self_as_reviewer(
 # ---------------------------------------------------------------------------
 # Server key pair  (RSA-4096, generated once by the server admin)
 # ---------------------------------------------------------------------------
+
 
 def get_server_public_key_pem() -> str:
     """Derive the PEM public key from SERVER_PRIVATE_KEY env var using openssl."""
@@ -550,8 +557,15 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
     try:
         # Decrypt the AES key+IV with RSA-OAEP
         result = subprocess.run(
-            ["openssl", "pkeyutl", "-decrypt", "-inkey", key_path,
-             "-pkeyopt", "rsa_padding_mode:oaep"],
+            [
+                "openssl",
+                "pkeyutl",
+                "-decrypt",
+                "-inkey",
+                key_path,
+                "-pkeyopt",
+                "rsa_padding_mode:oaep",
+            ],
             input=encrypted_key_iv,
             capture_output=True,
         )
@@ -570,8 +584,7 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
 
     # Decrypt the token with AES-256-CBC
     result2 = subprocess.run(
-        ["openssl", "enc", "-d", "-aes-256-cbc",
-         "-K", aes_key, "-iv", aes_iv, "-nosalt"],
+        ["openssl", "enc", "-d", "-aes-256-cbc", "-K", aes_key, "-iv", aes_iv, "-nosalt"],
         input=encrypted_token,
         capture_output=True,
     )
@@ -585,7 +598,7 @@ def decrypt_repo_token(encrypted_blob: str) -> str:
 # GitHub repo variables  (HAWKEYE_CLAUDE_API_URL + HAWKEYE_CLAUDE_BLOB)
 # ---------------------------------------------------------------------------
 
-_RepoVarsKey = tuple[str, str, str]       # (github_api_url, owner, repo)
+_RepoVarsKey = tuple[str, str, str]  # (github_api_url, owner, repo)
 _CredFileKey = tuple[str, str, str, str]  # (github_api_url, owner, repo, "credfile")
 _VarCacheKey = _RepoVarsKey | _CredFileKey
 _var_cache: dict[_VarCacheKey, tuple[dict[str, str], float]] = {}
@@ -768,8 +781,15 @@ def invoke_review(
 
     try:
         _invoke_review_inner(
-            env_name, env_cfg, script_path, owner, repo,
-            pr_number, placeholder_id, installation_token, repo_ctx,
+            env_name,
+            env_cfg,
+            script_path,
+            owner,
+            repo,
+            pr_number,
+            placeholder_id,
+            installation_token,
+            repo_ctx,
         )
     finally:
         with _inflight_lock:
@@ -777,8 +797,10 @@ def invoke_review(
 
 
 def _log_subprocess_output(
-    stdout: str | None, stderr: str | None,
-    env_name: str, repo_ctx: str,
+    stdout: str | None,
+    stderr: str | None,
+    env_name: str,
+    repo_ctx: str,
     stderr_level: str = "info",
 ) -> None:
     """Log non-empty lines from subprocess stdout/stderr."""
@@ -803,12 +825,14 @@ def _invoke_review_inner(
     repo_ctx: str,
 ) -> None:
     info("Starting review subprocess", env=env_name, repo=repo_ctx)
-    api_url, api_token = _resolve_api_credentials(
-        env_cfg, owner, repo, installation_token
-    )
+    api_url, api_token = _resolve_api_credentials(env_cfg, owner, repo, installation_token)
 
     if not api_url or not api_token:
-        error("No Claude credentials configured for this repo — skipping review", env=env_name, repo=repo_ctx)
+        error(
+            "No Claude credentials configured for this repo — skipping review",
+            env=env_name,
+            repo=repo_ctx,
+        )
         if placeholder_id:
             try:
                 err_body = (
@@ -830,7 +854,11 @@ def _invoke_review_inner(
                     ca_bundle=env_cfg.get("ssl_ca_bundle"),
                 )
             except Exception as patch_exc:
-                error(f"Failed to update placeholder with credentials error: {patch_exc}", env=env_name, repo=repo_ctx)
+                error(
+                    f"Failed to update placeholder with credentials error: {patch_exc}",
+                    env=env_name,
+                    repo=repo_ctx,
+                )
         return
 
     env = {
@@ -863,7 +891,9 @@ def _invoke_review_inner(
                 ca_bundle=env_cfg.get("ssl_ca_bundle"),
             )
         except Exception as patch_exc:
-            error(f"Failed to update placeholder with error: {patch_exc}", env=env_name, repo=repo_ctx)
+            error(
+                f"Failed to update placeholder with error: {patch_exc}", env=env_name, repo=repo_ctx
+            )
 
     try:
         result = subprocess.run(
@@ -885,8 +915,13 @@ def _invoke_review_inner(
         error("Review subprocess timed out after 900s", env=env_name, repo=repo_ctx)
         _update_placeholder_error("The review timed out after 15 minutes.")
     except Exception as exc:
-        _log_subprocess_output(getattr(exc, "stdout", None), getattr(exc, "stderr", None),
-                               env_name, repo_ctx, stderr_level="warn")
+        _log_subprocess_output(
+            getattr(exc, "stdout", None),
+            getattr(exc, "stderr", None),
+            env_name,
+            repo_ctx,
+            stderr_level="warn",
+        )
         error(f"Review subprocess error: {exc}", env=env_name, repo=repo_ctx)
         _update_placeholder_error(f"Unexpected error: `{exc}`.")
 
@@ -894,6 +929,7 @@ def _invoke_review_inner(
 # ---------------------------------------------------------------------------
 # Event dispatch
 # ---------------------------------------------------------------------------
+
 
 def dispatch_event(
     env_name: str,
@@ -916,17 +952,22 @@ def dispatch_event(
 
     allowed_orgs = env_cfg.get("allowed_orgs")
     if allowed_orgs and owner.lower() not in [o.lower() for o in allowed_orgs]:
-        info(f"Ignoring event from '{owner}' — not in allowed_orgs for {env_name}",
-             env=env_name, repo=repo_ctx)
+        info(
+            f"Ignoring event from '{owner}' — not in allowed_orgs for {env_name}",
+            env=env_name,
+            repo=repo_ctx,
+        )
         return
 
     try:
         if event_type == "pull_request":
-            _handle_pull_request(env_name, env_cfg, script_path, payload,
-                                 owner, repo_name, repo_ctx, installation_id)
+            _handle_pull_request(
+                env_name, env_cfg, script_path, payload, owner, repo_name, repo_ctx, installation_id
+            )
         elif event_type == "issue_comment":
-            _handle_issue_comment(env_name, env_cfg, script_path, payload,
-                                  owner, repo_name, repo_ctx, installation_id)
+            _handle_issue_comment(
+                env_name, env_cfg, script_path, payload, owner, repo_name, repo_ctx, installation_id
+            )
         else:
             info(f"Ignoring event type '{event_type}'", env=env_name, repo=repo_ctx)
     except Exception as exc:
@@ -956,27 +997,36 @@ def _handle_pull_request(
         if not bot_login or requested.get("login") != bot_login:
             info(
                 f"Ignoring review_requested for {requested.get('login')!r}",
-                env=env_name, repo=repo_ctx,
+                env=env_name,
+                repo=repo_ctx,
             )
             return
-        info(f"PR #{pr_number} re-review requested — triggering review", env=env_name, repo=repo_ctx)
+        info(
+            f"PR #{pr_number} re-review requested — triggering review", env=env_name, repo=repo_ctx
+        )
         token = get_cached_installation_token(env_name, env_cfg, installation_id)
         placeholder_id = post_placeholder_comment(
-            env_cfg["github_api_url"], token, owner, repo, pr_number,
+            env_cfg["github_api_url"],
+            token,
+            owner,
+            repo,
+            pr_number,
             env_cfg.get("ssl_ca_bundle"),
         )
         invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
         return
 
     if action == "synchronize":
-        info(f"Ignoring PR synchronize (manual trigger required)", env=env_name, repo=repo_ctx)
+        info("Ignoring PR synchronize (manual trigger required)", env=env_name, repo=repo_ctx)
         return
 
     if action not in ("opened", "reopened", "ready_for_review"):
         info(f"Ignoring PR action '{action}'", env=env_name, repo=repo_ctx)
         return
 
-    if is_draft and action != "ready_for_review":
+    head_ref = pr.get("head", {}).get("ref", "")
+    is_auto_triage = head_ref.startswith("fix/auto-")
+    if is_draft and action != "ready_for_review" and not is_auto_triage:
         info(f"Skipping draft PR #{pr_number}", env=env_name, repo=repo_ctx)
         return
 
@@ -987,12 +1037,21 @@ def _handle_pull_request(
     # "Re-request review" button (mirrors Copilot's behaviour).
     if bot_login:
         request_self_as_reviewer(
-            env_cfg["github_api_url"], token, owner, repo, pr_number,
-            bot_login, env_cfg.get("ssl_ca_bundle"),
+            env_cfg["github_api_url"],
+            token,
+            owner,
+            repo,
+            pr_number,
+            bot_login,
+            env_cfg.get("ssl_ca_bundle"),
         )
 
     placeholder_id = post_placeholder_comment(
-        env_cfg["github_api_url"], token, owner, repo, pr_number,
+        env_cfg["github_api_url"],
+        token,
+        owner,
+        repo,
+        pr_number,
         env_cfg.get("ssl_ca_bundle"),
     )
     invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
@@ -1028,15 +1087,22 @@ def _handle_issue_comment(
         info(
             f"PR #{issue.get('number')} — @hawkeye review ignored "
             f"(author_association={comment.get('author_association')!r})",
-            env=env_name, repo=repo_ctx,
+            env=env_name,
+            repo=repo_ctx,
         )
         return
 
     pr_number = issue.get("number")
-    info(f"PR #{pr_number} @hawkeye review comment — triggering review", env=env_name, repo=repo_ctx)
+    info(
+        f"PR #{pr_number} @hawkeye review comment — triggering review", env=env_name, repo=repo_ctx
+    )
     token = get_cached_installation_token(env_name, env_cfg, installation_id)
     placeholder_id = post_placeholder_comment(
-        env_cfg["github_api_url"], token, owner, repo, pr_number,
+        env_cfg["github_api_url"],
+        token,
+        owner,
+        repo,
+        pr_number,
         env_cfg.get("ssl_ca_bundle"),
     )
     invoke_review(env_name, env_cfg, script_path, owner, repo, pr_number, placeholder_id, token)
@@ -1045,6 +1111,7 @@ def _handle_issue_comment(
 # ---------------------------------------------------------------------------
 # HTTP handler
 # ---------------------------------------------------------------------------
+
 
 class WebhookHandler(BaseHTTPRequestHandler):
     """HTTP request handler for GitHub webhooks."""
@@ -1151,10 +1218,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
         return "", None
 
     def _health(self) -> None:
-        body = json.dumps({
-            "status": "ok",
-            "envs": list(self.server_config["envs"].keys()),
-        }).encode()
+        body = json.dumps(
+            {
+                "status": "ok",
+                "envs": list(self.server_config["envs"].keys()),
+            }
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -1172,12 +1241,14 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """HTTP server that handles each request in a new thread."""
+
     daemon_threads = True
 
 
 # ---------------------------------------------------------------------------
 # Auth smoke test
 # ---------------------------------------------------------------------------
+
 
 def run_test_auth(cfg: dict) -> None:
     """Test GitHub App JWT auth for all configured environments."""
@@ -1189,7 +1260,10 @@ def run_test_auth(cfg: dict) -> None:
         if env_cfg.get("github_app_private_key"):
             pem_display = "(inline PEM from config)"
         else:
-            pem_display = env_cfg.get("github_app_private_key_path") or "(using GITHUB_APP_PRIVATE_KEY env var)"
+            pem_display = (
+                env_cfg.get("github_app_private_key_path")
+                or "(using GITHUB_APP_PRIVATE_KEY env var)"
+            )
         print(f"  PEM            : {pem_display}")
         try:
             jwt = generate_github_app_jwt(
@@ -1205,7 +1279,9 @@ def run_test_auth(cfg: dict) -> None:
                 jwt,
                 ca_bundle=env_cfg.get("ssl_ca_bundle"),
             )
-            print(f"  Installations  : {[i.get('account', {}).get('login') for i in installations]}")
+            print(
+                f"  Installations  : {[i.get('account', {}).get('login') for i in installations]}"
+            )
             print("  Auth test      : PASSED")
         except Exception as exc:
             print(f"  Auth test      : FAILED — {exc}")
@@ -1217,6 +1293,7 @@ def run_test_auth(cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     if "--test-auth" in sys.argv:
@@ -1263,7 +1340,7 @@ def main() -> None:
             detail = f"{len(ca)} chars" if kind == "inline" else ca
             info(f"SSL CA bundle: {kind} ({detail})", env=name)
         elif "api.github.com" not in env_cfg.get("github_api_url", ""):
-            warn(f"SSL CA bundle: not set — GHES SSL may fail", env=name)
+            warn("SSL CA bundle: not set — GHES SSL may fail", env=name)
 
     try:
         server.serve_forever()

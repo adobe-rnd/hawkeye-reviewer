@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "full",
+  "commit_sha": "ed26d2f3e9e3d224b0b87d445734b5aeefc21807",
+  "author": "aenascut@adobe.com",
+  "timestamp": "2026-05-06T10:02:49+03:00",
+  "detection": {
+    "ai_assisted": true,
+    "method": "editor_hook",
+    "tool": "claude-code",
+    "model": "",
+    "confidence": 1.0
+  },
+  "stats": {
+    "total_additions": 3,
+    "total_deletions": 0,
+    "ai_additions": 3,
+    "ai_deletions": 0,
+    "human_additions": 0,
+    "human_deletions": 0
+  },
+  "files": {
+    "scripts/webhook_server.py": {
+      "ai_additions": 3,
+      "human_additions": 0,
+      "ai_deletions": 0,
+      "human_deletions": 0,
+      "ai_lines": "1085,1087-1088",
+      "human_lines": ""
+    }
+  }
+}

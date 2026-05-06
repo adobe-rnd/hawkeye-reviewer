@@ -1082,8 +1082,10 @@ def _handle_issue_comment(
 
     # Only allow org members, collaborators, and repo owners to trigger reviews.
     # This prevents fork PR commenters from triggering paid Bedrock calls.
+    # Exception: auto-triage PRs (fix/auto-*) are opened by github-actions[bot] — allow them.
     allowed_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
-    if comment.get("author_association", "") not in allowed_associations:
+    is_auto_triage = issue.get("title", "").startswith("fix(auto-")
+    if comment.get("author_association", "") not in allowed_associations and not is_auto_triage:
         info(
             f"PR #{issue.get('number')} — @hawkeye review ignored "
             f"(author_association={comment.get('author_association')!r})",
